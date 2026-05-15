@@ -58,6 +58,9 @@ pub(crate) fn create_backend(active: &TtsEngine, tts_config: &TtsConfig) -> Box<
         TtsEngine::ElevenLabs => Box::new(crate::tts::elevenlabs::ElevenLabsTtsBackend::new(
             tts_config.elevenlabs.clone(),
         )),
+        TtsEngine::Cartesia => Box::new(crate::tts::cartesia::CartesiaTtsBackend::new(
+            tts_config.cartesia.clone(),
+        )),
     }
 }
 
@@ -67,6 +70,7 @@ pub(crate) fn voice_for_backend(active: &TtsEngine, tts_config: &TtsConfig) -> S
         TtsEngine::Local => tts_config.voice.clone(),
         TtsEngine::OpenAI => tts_config.openai.voice.clone(),
         TtsEngine::ElevenLabs => tts_config.elevenlabs.voice_id.clone(),
+        TtsEngine::Cartesia => tts_config.cartesia.voice_id.clone(),
     }
 }
 
@@ -84,7 +88,19 @@ pub(crate) fn engine_identifier(active: &TtsEngine, tts_config: &TtsConfig) -> S
         }
         TtsEngine::OpenAI => "openai".to_string(),
         TtsEngine::ElevenLabs => "elevenlabs".to_string(),
+        TtsEngine::Cartesia => "cartesia".to_string(),
     }
+}
+
+fn slugify_filename_part(value: &str) -> String {
+    value
+        .split(" -")
+        .next()
+        .unwrap_or(value)
+        .split_whitespace()
+        .next()
+        .unwrap_or(value)
+        .to_lowercase()
 }
 
 /// Get the display name for a voice (used in history filenames and HUD).
@@ -104,13 +120,7 @@ pub(crate) fn voice_display_name(
                 .as_ref()
                 .map(|n| {
                     // Clean up: extract just the name before " -" or take first word
-                    n.split(" -")
-                        .next()
-                        .unwrap_or(n)
-                        .split_whitespace()
-                        .next()
-                        .unwrap_or(n)
-                        .to_lowercase()
+                    slugify_filename_part(n)
                 })
                 .unwrap_or_else(|| {
                     crate::tts::elevenlabs::ElevenLabsTtsBackend::resolve_voice_name_static(
@@ -119,6 +129,16 @@ pub(crate) fn voice_display_name(
                 })
         }
         TtsEngine::OpenAI => voice_id.to_lowercase(),
+        TtsEngine::Cartesia => tts_config
+            .cartesia
+            .voice_name
+            .as_deref()
+            .map(slugify_filename_part)
+            .unwrap_or_else(|| match voice_id {
+                "f786b574-daa5-4673-aa0c-cbe3e8534c02" => "katie".to_string(),
+                "a5136bf9-224c-4d76-b823-52bd5efcffcc" => "jameson".to_string(),
+                _ => "voice".to_string(),
+            }),
         TtsEngine::Local => {
             // For local engines, extract voice name from preset format (e.g., "en_US-joe-medium" -> "joe")
             voice_id
@@ -136,5 +156,6 @@ pub(crate) fn engine_str(active: &TtsEngine) -> &'static str {
         TtsEngine::Local => "local",
         TtsEngine::OpenAI => "openai",
         TtsEngine::ElevenLabs => "elevenlabs",
+        TtsEngine::Cartesia => "cartesia",
     }
 }

@@ -26,6 +26,14 @@ describe("OpenAiEngine", () => {
         output_format: "mp3_44100_128",
         voice_stability: 0.5,
         voice_similarity_boost: 0.75
+      },
+      cartesia: {
+        api_key: "",
+        model_id: "sonic-3.5",
+        voice_id: "f786b574-daa5-4673-aa0c-cbe3e8534c02",
+        voice_name: "Katie",
+        output_format: "wav",
+        use_manual_voice_id: false
       }
     },
     playback: { on_retrigger: "interrupt", volume: 100, playback_speed: 1.0 },

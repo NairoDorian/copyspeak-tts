@@ -42,6 +42,7 @@ fn get_provider_voice(cfg: &AppConfig) -> (Option<String>, Option<String>) {
         }
         TtsEngine::OpenAI => "OpenAI",
         TtsEngine::ElevenLabs => "ElevenLabs",
+        TtsEngine::Cartesia => "Cartesia",
     }
     .to_string();
     let voice = match cfg.tts.active_backend {
@@ -90,6 +91,12 @@ fn get_provider_voice(cfg: &AppConfig) -> (Option<String>, Option<String>) {
                 Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
             }
         }
+        TtsEngine::Cartesia => cfg
+            .tts
+            .cartesia
+            .voice_name
+            .clone()
+            .unwrap_or_else(|| "Katie".to_string()),
     };
     (Some(provider), Some(voice))
 }

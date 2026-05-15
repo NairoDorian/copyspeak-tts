@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Cartesia onboarding verification** — Onboarding now accepts a Cartesia API key and validates it via `check_cartesia_credentials` without synthesis.
+
+- **Cartesia TTS backend** — Added Cartesia Sonic 3.5 as a cloud TTS engine
+  - Added `CartesiaConfig`, `TtsEngine::Cartesia`, and `CartesiaTtsBackend`
+  - Added Cartesia engine settings UI with model, voice ID, and output format controls
+
+### Changed
+
+- **Default TTS engine** — New configs now default to Cartesia Sonic 3.5 with the Katie voice
+- **Default pagination fragment size** — New configs now use `fragment_size: 500`
+- **Engine picker order** — Cartesia now appears first in engine settings and footer selector
+- **Cartesia voice selection** — Cartesia settings now show resolved voice names with a manual voice ID fallback
+- **Onboarding flow** — First-run setup now focuses on Cartesia Cloud instead of local Kitten TTS installation
+
 ## [0.1.0] - 2026-03-27
 
 ### Added

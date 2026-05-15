@@ -50,6 +50,12 @@
 
   const ENGINES: EngineMeta[] = [
     {
+      id: "cartesia",
+      name: "Cartesia",
+      type: "cloud",
+      tier: "freemium"
+    },
+    {
       id: "kitten",
       name: "Kitten TTS",
       type: "local",
@@ -135,7 +141,8 @@
     kokoro: "adam",
     pocket: "alba",
     openai: "alloy",
-    elevenlabs: "21m00Tcm4TlvDq8ikWAM"
+    elevenlabs: "21m00Tcm4TlvDq8ikWAM",
+    cartesia: "f786b574-daa5-4673-aa0c-cbe3e8534c02"
   };
 
   // Derive current engine ID from config
@@ -159,6 +166,8 @@
         return "ElevenLabs";
       case "openai":
         return "OpenAI";
+      case "cartesia":
+        return "Cartesia";
       case "local":
         return "Local";
       default:
@@ -201,6 +210,13 @@
       }
       case "openai":
         return capitalizeVoice(config.tts.openai.voice);
+      case "cartesia":
+        if (config.tts.cartesia.voice_name) return config.tts.cartesia.voice_name;
+        if (config.tts.cartesia.voice_id === DEFAULT_VOICES.cartesia) return "Katie";
+        if (config.tts.cartesia.voice_id === "a5136bf9-224c-4d76-b823-52bd5efcffcc") {
+          return "Jameson";
+        }
+        return "Voice";
       case "piper":
       case "kitten":
       case "kokoro":
@@ -324,6 +340,9 @@
         newConfig.tts.elevenlabs.voice_id = DEFAULT_VOICES.elevenlabs;
       } else if (engine.id === "openai" && !newConfig.tts.openai.voice) {
         newConfig.tts.openai.voice = DEFAULT_VOICES.openai;
+      } else if (engine.id === "cartesia" && !newConfig.tts.cartesia.voice_id) {
+        newConfig.tts.cartesia.voice_id = DEFAULT_VOICES.cartesia;
+        newConfig.tts.cartesia.voice_name = "Katie";
       }
     } else {
       newConfig.tts.active_backend = "local";
