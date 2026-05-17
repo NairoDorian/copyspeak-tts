@@ -1,6 +1,7 @@
 <script lang="ts">
   import { _ } from "svelte-i18n";
-  import { Download, Github } from "@lucide/svelte";
+  import { Download } from "@lucide/svelte";
+  import Github from "$lib/components/icons/github.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
 
   const DOWNLOAD_URL = "https://github.com/ilyaizen/CopySpeak/releases";

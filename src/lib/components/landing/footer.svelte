@@ -1,7 +1,7 @@
 <script lang="ts">
   // TODO: Re-enable i18n when ready for multi-language support
   // import { _ } from "svelte-i18n";
-  import { Github } from "@lucide/svelte";
+  import Github from "$lib/components/icons/github.svelte";
   // TODO: Re-enable LanguageSwitcher when i18n is re-enabled
   // import LanguageSwitcher from "./language-switcher.svelte";
 

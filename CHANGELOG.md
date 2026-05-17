@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Unified web and desktop SvelteKit app** — Consolidated the former `src-web` landing page into the main `src` app
+  - Added Vercel environment detection via `import.meta.env.VITE_IS_VERCEL`
+  - Route layout now renders the marketing landing page on Vercel and the Tauri app shell locally/in desktop builds
+  - Removed the redundant `src-web` SvelteKit project
+
 - **Default TTS engine** — New configs now default to Cartesia Sonic 3.5 with the Katie voice
 - **Default pagination fragment size** — New configs now use `fragment_size: 500`
 - **Engine picker order** — Cartesia now appears first in engine settings and footer selector
