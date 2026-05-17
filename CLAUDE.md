@@ -1,7 +1,7 @@
 
 # CopySpeak Agent Guide
 
-> For AI coding agents (OpenCode, KiloCode, Claude Code, Cursor, etc.)
+> Guidance for Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Core Development Rules
 
