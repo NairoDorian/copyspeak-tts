@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Audio Effects system** — Frontend-only post-processing applied to TTS playback
+  - New `EffectsConfig` (Rust + TS) persisted in `AppConfig` with `enabled` and `active_effect`
+  - New Effects settings tab and conditional main-menu Effects tab (gated by `effects.enabled`)
+  - New `/effects` route with live effect selector and preview button
+  - **Walkie-talkie effect** — Narrow radio EQ, subtle saturation, light AM wobble, normalized PTT clicks, and low static under the voice
+  - **8-bit Game Boy effect** — 4-bit sample quantization resampled to 11025 Hz for crunchy retro voice
+  - `Effect` interface and registry in `src/lib/stores/playback/effects/` for extensibility
+  - Effects render inside `OfflineAudioContext` and integrate with existing pitch-shift pipeline; results cached per `{pitch, effect}` pair
+
 - **Cartesia onboarding verification** — Onboarding now accepts a Cartesia API key and validates it via `check_cartesia_credentials` without synthesis.
 
 - **Cartesia TTS backend** — Added Cartesia Sonic 3.5 as a cloud TTS engine
