@@ -37,6 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Cartesia voice selection** — Cartesia settings now show resolved voice names with a manual voice ID fallback
 - **Onboarding flow** — First-run setup now focuses on Cartesia Cloud instead of local Kitten TTS installation
 
+### Fixed
+
+- **CopySpeak Pi voice extension** — Switched Pi speech triggering from clipboard double-copy writes to the local CopySpeak control server, avoiding primer speech and Windows clipboard failures.
+- **CopySpeak Pi voice extension** — Disabled activity/tool announcements by default so normal use only speaks final assistant responses unless `/copyspeak-voice activity on` is enabled.
+- **CopySpeak control server** — Fixed `Content-Length` parsing so `/speak` accepts normal HTTP POST bodies from Pi, curl, and other clients.
+
 ## [0.1.0] - 2026-03-27
 
 ### Added
@@ -56,6 +62,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Shows last 20 lines, auto-refreshes every 2s
 
 ### Fixed
+
+- **CopySpeak Pi voice extension** — Reworked clipboard triggering to serialize double-copy events and avoid repeated trigger loops; startup now avoids focusing an already-running CopySpeak instance.
 
 - **Windows CLI backend PATH resolution** — Expanded PATH for finding Python/uv tools on Windows
   - Added `get_expanded_path()` to include common Python and uv installation paths
