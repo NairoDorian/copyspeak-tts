@@ -11,11 +11,17 @@
 
 import { isTauri } from "$lib/services/tauri.js";
 import type { EffectId } from "$lib/types";
-import { audioBufferToWavBlob, detectAudioMimeType } from "./playback/audio-utils.js";
+import {
+  audioBufferToWavBlob,
+  detectAudioMimeType,
+  prependLowLevelPreroll
+} from "./playback/audio-utils.js";
 import { AudioAnalyser } from "./playback/analyser.js";
 import { getEffect } from "./playback/effects/registry.js";
 import { FragmentQueue, type QueuedFragment } from "./playback/fragment-queue.js";
 import { hudStore } from "./hud-store.svelte.js";
+
+const WINDOWS_AUDIO_PREROLL_MS = 1200;
 
 class PlaybackStore {
   isPlaying = $state(false);
@@ -108,7 +114,12 @@ class PlaybackStore {
     }
     const effect = getEffect(effectId);
     let blob: Blob;
-    if (pitchRatio === 1.0 && !effect && this._originalBytes) {
+    if (
+      !this.shouldApplyWindowsPreroll() &&
+      pitchRatio === 1.0 &&
+      !effect &&
+      this._originalBytes
+    ) {
       const mimeType = detectAudioMimeType(this._originalBytes);
       blob = new Blob([this._originalBytes], { type: mimeType });
     } else if (this._decodedBuffer && this._audioCtx) {
@@ -132,6 +143,9 @@ class PlaybackStore {
       if (effect) {
         buffer = await effect.process(buffer, this._audioCtx);
       }
+      if (this.shouldApplyWindowsPreroll()) {
+        buffer = prependLowLevelPreroll(buffer, WINDOWS_AUDIO_PREROLL_MS);
+      }
       blob = audioBufferToWavBlob(buffer);
     } else {
       return "";
@@ -139,6 +153,10 @@ class PlaybackStore {
     const url = URL.createObjectURL(blob);
     this._cachedPitchUrl = { ratio: pitchRatio, effectId, url };
     return url;
+  }
+
+  private shouldApplyWindowsPreroll(): boolean {
+    return isTauri && navigator.userAgent.includes("Windows");
   }
 
   async handleAudioReady(base64: string): Promise<void> {
@@ -327,7 +345,15 @@ class PlaybackStore {
       // Legacy single audio-ready event (for non-paginated playback)
       const unAudioReady = await listen<string>("audio-ready", async (e) => {
         console.log("[PlaybackStore] audio-ready received");
-        await this.handleAudioReady(e.payload);
+        this._fragmentQueue.enqueue({
+          audioBase64: e.payload,
+          index: 1,
+          total: 1,
+          text: ""
+        });
+        if (!this._fragmentQueue.isProcessing()) {
+          await this._fragmentQueue.startProcessing();
+        }
       });
 
       // New streaming fragment-ready event

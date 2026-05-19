@@ -1,27 +1,31 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { execFileSync, spawn } from "node:child_process";
 import { request } from "node:http";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 
 type Engine = "cartesia" | "openai" | "elevenlabs" | "local";
 
 type State = {
   enabled: boolean;
-  engine: Engine;
+  engine: Engine | undefined;
+  effect: string | undefined;
   speakAssistant: boolean;
   speakActivity: boolean;
+  speakThinking: boolean;
   maxChars: number;
   launchCopySpeak: boolean;
 };
 
 const state: State = {
   enabled: envBool("COPYSPEAK_PI_ENABLED", true),
-  engine: (process.env.COPYSPEAK_PI_ENGINE as Engine) || "cartesia",
+  engine: isEngine(process.env.COPYSPEAK_PI_ENGINE) ? process.env.COPYSPEAK_PI_ENGINE : undefined,
+  effect: process.env.COPYSPEAK_PI_EFFECT || undefined,
   speakAssistant: envBool("COPYSPEAK_PI_ASSISTANT", true),
   speakActivity: envBool("COPYSPEAK_PI_ACTIVITY", false),
+  speakThinking: envBool("COPYSPEAK_PI_THINKING", true),
   maxChars: Number(process.env.COPYSPEAK_PI_MAX_CHARS || 700),
-  launchCopySpeak: envBool("COPYSPEAK_PI_LAUNCH", true)
+  launchCopySpeak: envBool("COPYSPEAK_PI_LAUNCH", false)
 };
 
 let lastSpoken = "";
@@ -29,14 +33,14 @@ let lastSpokenAt = 0;
 let speakQueue = Promise.resolve();
 let clipboardFailureCount = 0;
 let clipboardFailureNotified = false;
+let spokenThinkingBlocks = new Set<string>();
 
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     try {
-      configureCopySpeak(state.engine);
       if (state.launchCopySpeak) launchCopySpeak();
       ctx.ui.setStatus("copyspeak", statusText());
-      ctx.ui.notify(`CopySpeak voice ${state.enabled ? "enabled" : "disabled"} (${state.engine}, walkie-talkie)`, "info");
+      ctx.ui.notify(`CopySpeak ${statusText()}`, "info");
     } catch (error) {
       ctx.ui.setStatus("copyspeak", "voice config failed");
       ctx.ui.notify(`CopySpeak voice setup failed: ${String(error)}`, "error");
@@ -44,7 +48,23 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("agent_start", async (_event, ctx) => {
+    spokenThinkingBlocks = new Set();
     if (state.enabled && state.speakActivity) await speakSafe("CopySpeak: agent thinking.", ctx);
+  });
+
+  pi.on("message_update", async (event, ctx) => {
+    if (!state.enabled || !state.speakThinking) return;
+    const streamEvent = (event as any).assistantMessageEvent;
+    if (streamEvent?.type !== "thinking_end") return;
+
+    const content = streamEvent.content || findThinkingContent((event as any).message, streamEvent.contentIndex);
+    if (!content) return;
+
+    const key = `${streamEvent.contentIndex ?? "unknown"}:${content}`;
+    if (spokenThinkingBlocks.has(key)) return;
+    spokenThinkingBlocks.add(key);
+
+    await speakSafe(content, ctx);
   });
 
   pi.on("tool_execution_start", async (event) => {
@@ -53,14 +73,16 @@ export default function (pi: ExtensionAPI) {
     await speakSafe(`Using ${name}.`);
   });
 
-  pi.on("message_end", async (event, ctx) => {
+  pi.on("agent_end", async (event, ctx) => {
     if (!state.enabled || !state.speakAssistant) return;
-    if ((event as any).message?.role !== "assistant") return;
-    const text = cleanForSpeech(extractText((event as any).message)).slice(0, state.maxChars);
+    const message = [...((event as any).messages || [])]
+      .reverse()
+      .find((message) => message?.role === "assistant");
+    const text = cleanForSpeech(extractText(message)).slice(0, state.maxChars);
     if (text) await speakSafe(text, ctx);
   });
 
-  pi.registerCommand("copyspeak-voice", {
+  pi.registerCommand("copyspeak", {
     description: "Control CopySpeak voice notifications: on/off/status/test/engine <cartesia|openai|elevenlabs|local>",
     handler: async (args, ctx) => {
       const [cmd, value] = args.trim().split(/\s+/);
@@ -75,10 +97,10 @@ export default function (pi: ExtensionAPI) {
         else if (cmd === "engine") {
           if (!isEngine(value)) throw new Error("engine must be cartesia, openai, elevenlabs, or local");
           state.engine = value;
-          configureCopySpeak(state.engine);
         } else if (cmd === "activity") state.speakActivity = value !== "off";
         else if (cmd === "assistant") state.speakAssistant = value !== "off";
-        else throw new Error("usage: /copyspeak-voice on|off|status|test [text]|engine <engine>|activity on|off|assistant on|off");
+        else if (cmd === "thinking") state.speakThinking = value !== "off";
+        else throw new Error("usage: /copyspeak on|off|status|test [text]|engine <engine>|activity on|off|assistant on|off|thinking on|off");
         ctx.ui.setStatus("copyspeak", statusText());
         ctx.ui.notify(statusText(), "info");
       } catch (error) {
@@ -89,13 +111,17 @@ export default function (pi: ExtensionAPI) {
 }
 
 function statusText() {
-  return `${state.enabled ? "voice on" : "voice off"} · ${state.engine} · walkie`;
+  return state.enabled ? "on" : "off";
 }
 
 async function speakSafe(text: string, ctx?: any, force = false) {
+  const cleaned = cleanForSpeech(text);
+  if (!cleaned) return;
+  if (!force && shouldSkipDuplicate(cleaned)) return;
+
   speakQueue = speakQueue
     .catch(() => undefined)
-    .then(() => speak(text, force))
+    .then(() => speak(cleaned))
     .catch((error) => {
       clipboardFailureCount++;
       ctx?.ui?.setStatus?.("copyspeak", "voice failed");
@@ -108,21 +134,22 @@ async function speakSafe(text: string, ctx?: any, force = false) {
   await speakQueue;
 }
 
-async function speak(text: string, force = false) {
-  const cleaned = cleanForSpeech(text);
-  if (!cleaned) return;
-  const now = Date.now();
-  if (!force && cleaned === lastSpoken && now - lastSpokenAt < 5000) return;
-  lastSpoken = cleaned;
-  lastSpokenAt = now;
-
-  await postSpeak(cleaned);
+async function speak(text: string) {
+  await postSpeak(text);
   clipboardFailureCount = 0;
   clipboardFailureNotified = false;
 }
 
+function shouldSkipDuplicate(text: string) {
+  const now = Date.now();
+  if (text === lastSpoken && now - lastSpokenAt < 120000) return true;
+  lastSpoken = text;
+  lastSpokenAt = now;
+  return false;
+}
+
 async function postSpeak(text: string) {
-  const body = JSON.stringify({ text, engine: state.engine, effect: "walkie_talkie" });
+  const body = JSON.stringify({ text, engine: state.engine, effect: state.effect });
   const url = new URL(process.env.COPYSPEAK_CONTROL_URL || "http://127.0.0.1:43117/speak");
 
   await new Promise<void>((resolve, reject) => {
@@ -181,68 +208,35 @@ function findBuiltCopySpeak() {
   return candidates.find(existsSync);
 }
 
-function configureCopySpeak(engine: Engine) {
-  const path = configPath();
-  const cfg = loadConfig(path);
-  cfg.trigger ??= {};
-  cfg.trigger.listen_enabled = true;
-  cfg.trigger.double_copy_window_ms ??= 1500;
-  cfg.trigger.max_text_length ??= 100000;
 
-  cfg.effects ??= {};
-  cfg.effects.enabled = true;
-  cfg.effects.active_effect = "walkie_talkie";
-
-  cfg.tts ??= {};
-  cfg.tts.active_backend = engine;
-  cfg.tts.cartesia ??= {};
-  cfg.tts.openai ??= {};
-  cfg.tts.elevenlabs ??= {};
-
-  if (process.env.CARTESIA_API_KEY) cfg.tts.cartesia.api_key = process.env.CARTESIA_API_KEY;
-  if (process.env.OPENAI_API_KEY) cfg.tts.openai.api_key = process.env.OPENAI_API_KEY;
-  if (process.env.ELEVENLABS_API_KEY) cfg.tts.elevenlabs.api_key = process.env.ELEVENLABS_API_KEY;
-
-  cfg.tts.cartesia.model_id ??= "sonic-3.5";
-  cfg.tts.cartesia.voice_id ??= "f786b574-daa5-4673-aa0c-cbe3e8534c02";
-  cfg.tts.cartesia.voice_name ??= "Katie";
-  cfg.tts.cartesia.output_format ??= "wav";
-  cfg.tts.openai.model ??= "tts-1";
-  cfg.tts.openai.voice ??= "alloy";
-  cfg.tts.elevenlabs.voice_id ??= "21m00Tcm4TlvDq8ikWAM";
-  cfg.tts.elevenlabs.voice_name ??= "Rachel";
-  cfg.tts.elevenlabs.model_id ??= "eleven_turbo_v2_5";
-
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(cfg, null, 2));
-}
-
-function configPath() {
-  const base = process.env.APPDATA || join(process.env.USERPROFILE || process.env.HOME || ".", "AppData", "Roaming");
-  return join(base, "CopySpeak", "config.json");
-}
-
-function loadConfig(path: string): any {
-  if (!existsSync(path)) return defaultConfig();
-  return JSON.parse(readFileSync(path, "utf8"));
-}
-
-function defaultConfig(): any {
-  return {
-    version: "0.1.1",
-    general: { start_with_windows: false, start_minimized: true, debug_mode: false, close_behavior: "minimize_to_tray", appearance: "system", update_checks_enabled: true, locale: "en" },
-    trigger: { listen_enabled: true, double_copy_window_ms: 1500, max_text_length: 100000 },
-    tts: { active_backend: "cartesia", preset: "kitten-tts", command: "py", args_template: ["-3.12", "{home_dir}/kittentts/kittentts-cli.py", "--text", "{raw_text}", "--voice", "{voice}", "--output", "{output}"], voice: "Rosie", openai: {}, elevenlabs: {}, cartesia: {} },
-    playback: {}, hud: {}, output: {}, sanitization: {}, pagination: {}, history: {}, hotkey: {},
-    effects: { enabled: true, active_effect: "walkie_talkie" }
-  };
+function findThinkingContent(message: any, contentIndex: number | undefined): string {
+  const content = message?.content;
+  if (!Array.isArray(content) || contentIndex == null) return "";
+  const part = content[contentIndex];
+  return part?.type === "thinking" ? part.thinking || part.text || "" : "";
 }
 
 function extractText(message: any): string {
   const content = message?.content;
   if (typeof content === "string") return content;
-  if (Array.isArray(content)) return content.map((p) => typeof p === "string" ? p : (p?.text || "")).join("\n");
-  return "";
+  if (!Array.isArray(content)) return "";
+
+  return content
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (part?.type === "thinking") {
+        const thinking = part.thinking || part.text || "";
+        if (!state.speakThinking || hasSpokenThinkingContent(thinking)) return "";
+        return thinking;
+      }
+      if (part?.type === "text") return part.text || "";
+      return part?.text || "";
+    })
+    .join("\n");
+}
+
+function hasSpokenThinkingContent(content: string): boolean {
+  return [...spokenThinkingBlocks].some((entry) => entry.endsWith(`:${content}`));
 }
 
 function cleanForSpeech(text: string): string {

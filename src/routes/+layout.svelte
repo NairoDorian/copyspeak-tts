@@ -12,6 +12,7 @@
   import { Sonner } from "$lib/components/ui/sonner/index.js";
   import { TooltipProvider } from "$lib/components/ui/tooltip/index.js";
   import GlobalPlayer from "$lib/components/global-player.svelte";
+  import { playbackStore } from "$lib/stores/playback-store.svelte";
   import { setLocale } from "$lib/i18n";
   import { isRtl } from "$lib/i18n/store";
   import ThemeToggle from "$lib/components/theme-toggle.svelte";
@@ -95,6 +96,10 @@
       if (savedLocale) {
         setLocale(savedLocale);
       }
+
+      const { volume, playback_speed, pitch } = config.playback;
+      const activeEffect = config.effects?.enabled ? config.effects.active_effect : "none";
+      playbackStore.syncPlaybackConfig(volume, playback_speed, pitch, activeEffect);
     } catch (e) {
       console.error("Failed to sync appearance/locale:", e);
     }
@@ -151,7 +156,7 @@
 
 {#if isWeb}
   <ModeWatcher />
-  <div class="bg-background min-h-screen">
+  <div class="bg-background h-screen overflow-y-auto overflow-x-auto" dir={$isRtl ? "rtl" : "ltr"}>
     <header class="border-border bg-background sticky top-0 z-50 border-b">
       <div class="mx-auto flex max-w-5xl items-center justify-between px-6 py-3">
         <a href="/" class="flex items-center gap-3">

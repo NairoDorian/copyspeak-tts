@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-05-19
+
+### Added
+
+- **Update controls in settings** — Added the footer update status/check/install control below the automatic update-check setting.
+
+### Fixed
+
+- **CopySpeak Pi extension** — Renamed the Pi command/extension path to `copyspeak` and shortened its Pi status text to `on`/`off`.
+- **Vercel landing page** — Re-enabled non-English locale registration and footer language switching, and restored page scrolling despite the desktop app's global hidden body overflow.
+- **Windows audio wake-up** — Add a low-level preroll to desktop playback on Windows so the audio device wakes before speech or radio effects begin.
+- **About settings layout** — Removed the stale import/export separator and aligned About rows with the shared `SettingRow` spacing.
+
+## [0.1.2] - 2026-05-18
+
 ### Added
 
 - **Audio Effects system** — Frontend-only post-processing applied to TTS playback
@@ -18,6 +33,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `Effect` interface and registry in `src/lib/stores/playback/effects/` for extensibility
   - Effects render inside `OfflineAudioContext` and integrate with existing pitch-shift pipeline; results cached per `{pitch, effect}` pair
 
+### Changed
+
+- **Unified web and desktop SvelteKit app** — Consolidated the former `src-web` landing page into the main `src` app
+  - Added Vercel environment detection via `import.meta.env.VITE_IS_VERCEL`
+  - Route layout now renders the marketing landing page on Vercel and the Tauri app shell locally/in desktop builds
+  - Removed the redundant `src-web` SvelteKit project
+
+### Fixed
+
+- **CopySpeak Pi voice extension** — Switched Pi speech triggering from clipboard double-copy writes to the local CopySpeak control server, avoiding primer speech and Windows clipboard failures.
+- **CopySpeak Pi voice extension** — Disabled activity/tool announcements by default so normal use only speaks final assistant responses unless `/copyspeak activity on` is enabled.
+- **CopySpeak Pi voice extension** — Now speaks only once after an agent run completes and no longer auto-launches CopySpeak unless `COPYSPEAK_PI_LAUNCH=1` is set.
+- **CopySpeak Pi voice extension** — Added a two-minute duplicate speech guard to avoid charging TTS credits for repeated final messages.
+- **CopySpeak Pi voice extension** — Uses the running app's engine/effect settings by default and can include Pi thinking blocks in spoken assistant responses.
+- **CopySpeak Pi voice extension** — Speaks Pi thinking blocks as soon as each thinking block finishes streaming, while avoiding replaying those blocks in the final response.
+- **CopySpeak control server** — Fixed `Content-Length` parsing so `/speak` accepts normal HTTP POST bodies from Pi, curl, and other clients.
+- **CopySpeak control server** — `/speak` now waits for speech generation to complete before responding, allowing Pi extension requests to queue synthesis instead of overlapping.
+- **Playback queue** — Single `audio-ready` events now use the existing fragment queue so Pi-generated thinking and final responses play sequentially instead of interrupting each other.
+- **Global playback settings** — Sync playback volume, speed, pitch, and effects during app startup so Pi control-server speech uses the configured walkie-talkie effect outside the Play page.
+
+## [0.1.1] - 2026-05-15
+
+### Added
+
 - **Cartesia onboarding verification** — Onboarding now accepts a Cartesia API key and validates it via `check_cartesia_credentials` without synthesis.
 
 - **Cartesia TTS backend** — Added Cartesia Sonic 3.5 as a cloud TTS engine
@@ -26,22 +65,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Unified web and desktop SvelteKit app** — Consolidated the former `src-web` landing page into the main `src` app
-  - Added Vercel environment detection via `import.meta.env.VITE_IS_VERCEL`
-  - Route layout now renders the marketing landing page on Vercel and the Tauri app shell locally/in desktop builds
-  - Removed the redundant `src-web` SvelteKit project
-
 - **Default TTS engine** — New configs now default to Cartesia Sonic 3.5 with the Katie voice
 - **Default pagination fragment size** — New configs now use `fragment_size: 500`
 - **Engine picker order** — Cartesia now appears first in engine settings and footer selector
 - **Cartesia voice selection** — Cartesia settings now show resolved voice names with a manual voice ID fallback
 - **Onboarding flow** — First-run setup now focuses on Cartesia Cloud instead of local Kitten TTS installation
-
-### Fixed
-
-- **CopySpeak Pi voice extension** — Switched Pi speech triggering from clipboard double-copy writes to the local CopySpeak control server, avoiding primer speech and Windows clipboard failures.
-- **CopySpeak Pi voice extension** — Disabled activity/tool announcements by default so normal use only speaks final assistant responses unless `/copyspeak-voice activity on` is enabled.
-- **CopySpeak control server** — Fixed `Content-Length` parsing so `/speak` accepts normal HTTP POST bodies from Pi, curl, and other clients.
 
 ## [0.1.0] - 2026-03-27
 
@@ -196,7 +224,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SSML support removed** — SSML markup passthrough feature removed
 - **Streaming TTS mode removed** — Simplified to paginated synthesis only
 
-[Unreleased]: https://github.com/ilyaizen/copyspeak/compare/v0.0.5...HEAD
+[Unreleased]: https://github.com/ilyaizen/copyspeak/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/ilyaizen/copyspeak/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/ilyaizen/copyspeak/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/ilyaizen/copyspeak/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/ilyaizen/copyspeak/compare/v0.0.5...v0.1.0
 [0.0.5]: https://github.com/ilyaizen/copyspeak/compare/v0.0.3...v0.0.5
 [0.0.3]: https://github.com/ilyaizen/copyspeak/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/ilyaizen/copyspeak/compare/v0.0.1...v0.0.2

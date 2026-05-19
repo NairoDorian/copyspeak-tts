@@ -1,6 +1,6 @@
 # CopySpeak Pi Voice Extension
 
-Project-local Pi extension: `.pi/extensions/copyspeak-voice/`.
+Project-local Pi extension: `.pi/extensions/copyspeak/`.
 
 ## What it does
 
@@ -24,13 +24,13 @@ If `COPYSPEAK_EXE` is omitted, the extension looks for release/debug `copyspeak.
 ## Commands
 
 ```text
-/copyspeak-voice status
-/copyspeak-voice on
-/copyspeak-voice off
-/copyspeak-voice test hello from pi
-/copyspeak-voice engine cartesia|openai|elevenlabs|local
-/copyspeak-voice activity on|off
-/copyspeak-voice assistant on|off
+/copyspeak status
+/copyspeak on
+/copyspeak off
+/copyspeak test hello from pi
+/copyspeak engine cartesia|openai|elevenlabs|local
+/copyspeak activity on|off
+/copyspeak assistant on|off
 ```
 
 ## Environment flags

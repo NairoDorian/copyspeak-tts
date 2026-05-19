@@ -1,21 +1,22 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { page } from "$app/state";
-  import { Play, Settings, Cpu, Clock, WandSparkles } from "@lucide/svelte";
+  // import { Play, Settings, Cpu, Clock, WandSparkles } from "@lucide/svelte";
+  import { Play, Settings, Cpu, Clock } from "@lucide/svelte";
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { isTauri } from "$lib/services/tauri.js";
   import type { AppConfig } from "$lib/types";
 
   let historyEnabled = $state(false);
-  let effectsEnabled = $state(false);
+  // let effectsEnabled = $state(false);
 
   onMount(async () => {
     if (isTauri) {
       try {
         const config = await invoke<AppConfig>("get_config");
         historyEnabled = config.history.enabled;
-        effectsEnabled = config.effects?.enabled ?? false;
+        // effectsEnabled = config.effects?.enabled ?? false;
       } catch {
         // Ignore errors
       }
@@ -39,16 +40,17 @@
           }
         ]
       : []),
-    ...(effectsEnabled
-      ? [
-          {
-            id: "effects",
-            label: $_("header.effects"),
-            href: "/effects",
-            icon: WandSparkles
-          }
-        ]
-      : []),
+    //
+    // ...(effectsEnabled
+    //   ? [
+    //       {
+    //         id: "effects",
+    //         label: $_("header.effects"),
+    //         href: "/effects",
+    //         icon: WandSparkles
+    //       }
+    //     ]
+    //   : []),
     {
       id: "engine",
       label: $_("header.engine"),

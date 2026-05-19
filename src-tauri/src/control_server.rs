@@ -65,14 +65,12 @@ fn handle_connection(mut stream: TcpStream, app: AppHandle) {
 
     let response = match parse_request(&buffer) {
         Ok(ControlRequest::Health) => http_response(200, "OK", r#"{"ok":true,"app":"CopySpeak"}"#),
-        Ok(ControlRequest::Speak(request)) => {
-            let app_clone = app.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(error) = speak(app_clone, request).await {
-                    log::error!("[Control] Speak failed: {}", error);
-                }
-            });
-            http_response(202, "Accepted", r#"{"ok":true}"#)
+        Ok(ControlRequest::Speak(request)) => match tauri::async_runtime::block_on(speak(app.clone(), request)) {
+            Ok(()) => http_response(200, "OK", r#"{"ok":true}"#),
+            Err(error) => {
+                log::error!("[Control] Speak failed: {}", error);
+                http_response(500, "Error", &format!(r#"{{"error":{:?}}}"#, error))
+            }
         }
         Err((status, message)) => {
             http_response(status, "Error", &format!(r#"{{"error":{:?}}}"#, message))
