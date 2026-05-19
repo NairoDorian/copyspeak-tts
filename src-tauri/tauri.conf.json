@@ -41,7 +41,7 @@
         "label": "main",
         "title": "CopySpeak",
         "width": 775,
-        "height": 640,
+        "height": 580,
         "resizable": false,
         "center": true,
         "visible": true

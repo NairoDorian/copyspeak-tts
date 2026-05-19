@@ -6,9 +6,12 @@ use serde::Deserialize;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
 
 const DEFAULT_ADDR: &str = "127.0.0.1:43117";
+const MAX_BODY_BYTES: usize = 200_000;
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Deserialize)]
 struct SpeakRequest {
@@ -44,16 +47,21 @@ pub fn start(app: AppHandle) {
 }
 
 fn handle_connection(mut stream: TcpStream, app: AppHandle) {
+    let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(READ_TIMEOUT));
+
     let mut buffer = Vec::new();
     let mut chunk = [0_u8; 4096];
 
-    loop {
+    let read_result = loop {
         match stream.read(&mut chunk) {
-            Ok(0) => break,
+            Ok(0) => break Ok(()),
             Ok(n) => {
                 buffer.extend_from_slice(&chunk[..n]);
-                if request_complete(&buffer) {
-                    break;
+                match request_state(&buffer) {
+                    RequestState::Incomplete => continue,
+                    RequestState::Complete => break Ok(()),
+                    RequestState::TooLarge => break Err((413, "request too large".to_string())),
                 }
             }
             Err(error) => {
@@ -61,33 +69,53 @@ fn handle_connection(mut stream: TcpStream, app: AppHandle) {
                 return;
             }
         }
-    }
+    };
 
-    let response = match parse_request(&buffer) {
+    let response = match read_result.and_then(|()| parse_request(&buffer)) {
         Ok(ControlRequest::Health) => http_response(200, "OK", r#"{"ok":true,"app":"CopySpeak"}"#),
-        Ok(ControlRequest::Speak(request)) => match tauri::async_runtime::block_on(speak(app.clone(), request)) {
-            Ok(()) => http_response(200, "OK", r#"{"ok":true}"#),
-            Err(error) => {
-                log::error!("[Control] Speak failed: {}", error);
-                http_response(500, "Error", &format!(r#"{{"error":{:?}}}"#, error))
+        Ok(ControlRequest::Speak(request)) => {
+            match tauri::async_runtime::block_on(speak(app.clone(), request)) {
+                Ok(()) => http_response(200, "OK", r#"{"ok":true}"#),
+                Err(error) => {
+                    log::error!("[Control] Speak failed: {}", error);
+                    http_response(500, "Error", &json_error(&error))
+                }
             }
         }
-        Err((status, message)) => {
-            http_response(status, "Error", &format!(r#"{{"error":{:?}}}"#, message))
-        }
+        Err((status, message)) => http_response(status, "Error", &json_error(&message)),
     };
 
     let _ = stream.write_all(response.as_bytes());
 }
 
-fn request_complete(buffer: &[u8]) -> bool {
-    let header_end = find_header_end(buffer);
-    let Some(header_end) = header_end else {
-        return false;
+enum RequestState {
+    Incomplete,
+    Complete,
+    TooLarge,
+}
+
+fn request_state(buffer: &[u8]) -> RequestState {
+    let Some(header_end) = find_header_end(buffer) else {
+        if buffer.len() > MAX_BODY_BYTES {
+            return RequestState::TooLarge;
+        }
+        return RequestState::Incomplete;
     };
     let headers = String::from_utf8_lossy(&buffer[..header_end]);
     let content_length = content_length(&headers).unwrap_or(0);
-    buffer.len() >= header_end + 4 + content_length
+    if content_length > MAX_BODY_BYTES {
+        return RequestState::TooLarge;
+    }
+    if buffer.len() >= header_end + 4 + content_length {
+        RequestState::Complete
+    } else {
+        RequestState::Incomplete
+    }
+}
+
+fn json_error(message: &str) -> String {
+    let value = serde_json::json!({ "error": message });
+    value.to_string()
 }
 
 fn content_length(headers: &str) -> Option<usize> {
@@ -111,11 +139,6 @@ fn parse_request(buffer: &[u8]) -> Result<ControlRequest, (u16, String)> {
     }
 
     let content_length = content_length(&headers).unwrap_or(0);
-
-    if content_length > 200_000 {
-        return Err((413, "request too large".to_string()));
-    }
-
     let body_start = header_end + 4;
     let body_end = body_start + content_length;
     if buffer.len() < body_end {
@@ -137,13 +160,14 @@ fn find_header_end(buffer: &[u8]) -> Option<usize> {
 async fn speak(app: AppHandle, request: SpeakRequest) -> Result<(), String> {
     if request.engine.is_some() || request.effect.is_some() {
         let config_state: State<Mutex<AppConfig>> = app.state();
-        let mut cfg = config_state.lock().unwrap();
+        let mut cfg = config_state.lock().map_err(|e| e.to_string())?;
         if let Some(engine) = request.engine.as_deref() {
             cfg.tts.active_backend = parse_engine(engine)?;
         }
-        if matches!(request.effect.as_deref(), Some("walkie_talkie")) {
-            cfg.effects.enabled = true;
-            cfg.effects.active_effect = EffectId::WalkieTalkie;
+        if let Some(effect) = request.effect.as_deref() {
+            let effect_id = parse_effect(effect)?;
+            cfg.effects.enabled = effect_id != EffectId::None;
+            cfg.effects.active_effect = effect_id;
         }
         config::save(&cfg)?;
     }
@@ -170,6 +194,15 @@ fn parse_engine(engine: &str) -> Result<TtsEngine, String> {
         "elevenlabs" | "eleven_labs" => Ok(TtsEngine::ElevenLabs),
         "local" => Ok(TtsEngine::Local),
         _ => Err(format!("unsupported engine: {}", engine)),
+    }
+}
+
+fn parse_effect(effect: &str) -> Result<EffectId, String> {
+    match effect.to_ascii_lowercase().as_str() {
+        "none" | "" => Ok(EffectId::None),
+        "walkie_talkie" => Ok(EffectId::WalkieTalkie),
+        "game_boy" => Ok(EffectId::GameBoy),
+        _ => Err(format!("unsupported effect: {}", effect)),
     }
 }
 

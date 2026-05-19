@@ -36,7 +36,9 @@
   <div class="space-y-4">
     <div class="flex items-center justify-between gap-4">
       <div class="flex w-40 items-center gap-1.5">
-        <Label for="cartesia-model" class="whitespace-nowrap">{$_("engine.cartesiaEngine.model")}</Label>
+        <Label for="cartesia-model" class="whitespace-nowrap"
+          >{$_("engine.cartesiaEngine.model")}</Label
+        >
         <InfoTooltip text={$_("engine.cartesiaEngine.modelTooltip")} />
       </div>
       <Select
@@ -100,7 +102,9 @@
 
     <div class="flex items-center justify-between gap-4">
       <div class="flex w-40 items-center gap-1.5">
-        <Label for="cartesia-format" class="whitespace-nowrap">{$_("engine.cartesiaEngine.format")}</Label>
+        <Label for="cartesia-format" class="whitespace-nowrap"
+          >{$_("engine.cartesiaEngine.format")}</Label
+        >
         <InfoTooltip text={$_("engine.cartesiaEngine.formatTooltip")} />
       </div>
       <Select

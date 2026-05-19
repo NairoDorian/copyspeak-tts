@@ -27,11 +27,7 @@
       label={$_("settings.effects.active")}
       tooltip={$_("settings.effects.activeDescription")}
     >
-      <Select
-        options={effectOptions}
-        bind:value={localConfig.effects.active_effect}
-        class="w-44"
-      />
+      <Select options={effectOptions} bind:value={localConfig.effects.active_effect} class="w-44" />
     </SettingRow>
   {/if}
 </div>

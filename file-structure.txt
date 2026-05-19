@@ -2,13 +2,43 @@
 ├── .github
 │   └── workflows
 │       └── build-windows.yml
+├── .pi
+│   └── extensions
+│       └── copyspeak
+│           ├── README.md
+│           └── index.ts
 ├── .vscode
 │   └── settings.json
+├── agent-harness
+│   ├── cli_anything
+│   │   └── copyspeak
+│   │       ├── core
+│   │       │   ├── __init__.py
+│   │       │   ├── export.py
+│   │       │   ├── project.py
+│   │       │   ├── queue.py
+│   │       │   └── session.py
+│   │       ├── tests
+│   │       │   ├── TEST.md
+│   │       │   ├── test_core.py
+│   │       │   └── test_full_e2e.py
+│   │       ├── utils
+│   │       │   ├── __init__.py
+│   │       │   ├── copyspeak_backend.py
+│   │       │   └── repl_skin.py
+│   │       ├── README.md
+│   │       ├── __init__.py
+│   │       ├── __main__.py
+│   │       └── copyspeak_cli.py
+│   ├── COPYSPEAK.md
+│   └── setup.py
 ├── docs
 │   └── CONTRIBUTING.md
 ├── docs_internal
+│   ├── CARTESIA_TTS_PLAN.md
 │   ├── README.md
 │   ├── add-comments.md
+│   ├── app-logo.png
 │   ├── architecture.md
 │   ├── brutalist_design.md
 │   ├── build_workflow.md
@@ -16,6 +46,7 @@
 │   ├── event-system.md
 │   ├── hud-overlay.md
 │   ├── implemented_features.md
+│   ├── kittentts-cli.py
 │   ├── project-overview.md
 │   ├── requirements.md
 │   ├── roadmap.md
@@ -65,6 +96,12 @@
 │   │   │   │   ├── hud-status.svelte
 │   │   │   │   ├── hud-synthesis-progress.svelte
 │   │   │   │   └── index.ts
+│   │   │   ├── landing
+│   │   │   │   ├── features.svelte
+│   │   │   │   ├── footer.svelte
+│   │   │   │   ├── hero.svelte
+│   │   │   │   ├── language-switcher.svelte
+│   │   │   │   └── screenshots.svelte
 │   │   │   ├── layout
 │   │   │   │   ├── app-footer.svelte
 │   │   │   │   └── app-header.svelte
@@ -72,6 +109,7 @@
 │   │   │   │   ├── about-settings.svelte
 │   │   │   │   ├── appearance-settings.svelte
 │   │   │   │   ├── batch-settings.svelte
+│   │   │   │   ├── effects-settings.svelte
 │   │   │   │   ├── general-settings.svelte
 │   │   │   │   ├── history-settings.svelte
 │   │   │   │   ├── hotkey-settings.svelte
@@ -79,6 +117,7 @@
 │   │   │   │   ├── pagination-settings.svelte
 │   │   │   │   ├── playback-settings.svelte
 │   │   │   │   └── sanitization-settings.svelte
+│   │   │   ├── effects-page.svelte
 │   │   │   ├── global-player.svelte
 │   │   │   ├── history-page.svelte
 │   │   │   ├── hotkey-capture.svelte
@@ -116,6 +155,11 @@
 │   │   │   └── tauri.ts
 │   │   ├── stores
 │   │   │   ├── playback
+│   │   │   │   ├── effects
+│   │   │   │   │   ├── game-boy.ts
+│   │   │   │   │   ├── registry.ts
+│   │   │   │   │   ├── types.ts
+│   │   │   │   │   └── walkie-talkie.ts
 │   │   │   │   ├── analyser.ts
 │   │   │   │   ├── audio-utils.ts
 │   │   │   │   └── fragment-queue.ts
@@ -140,6 +184,8 @@
 │   ├── mocks
 │   │   └── state.ts
 │   ├── routes
+│   │   ├── effects
+│   │   │   └── +page.svelte
 │   │   ├── engine
 │   │   │   └── +page.svelte
 │   │   ├── history
@@ -187,6 +233,7 @@
 │   │   │   ├── queue.rs
 │   │   │   └── update.rs
 │   │   ├── config
+│   │   │   ├── effects.rs
 │   │   │   ├── general.rs
 │   │   │   ├── hotkey.rs
 │   │   │   ├── hud.rs
@@ -210,6 +257,7 @@
 │   │   │   └── openai.rs
 │   │   ├── autostart.rs
 │   │   ├── clipboard.rs
+│   │   ├── control_server.rs
 │   │   ├── fragment_queue.rs
 │   │   ├── history.rs
 │   │   ├── history_manager.rs
@@ -223,46 +271,10 @@
 │   ├── Cargo.toml
 │   ├── build.rs
 │   └── tauri.conf.json
-├── src-web
-│   ├── src
-│   │   ├── lib
-│   │   │   ├── components
-│   │   │   │   ├── landing
-│   │   │   │   │   ├── features.svelte
-│   │   │   │   │   ├── footer.svelte
-│   │   │   │   │   ├── hero.svelte
-│   │   │   │   │   ├── language-switcher.svelte
-│   │   │   │   │   └── screenshots.svelte
-│   │   │   │   └── theme-toggle.svelte
-│   │   │   ├── i18n
-│   │   │   │   ├── index.ts
-│   │   │   │   ├── store.ts
-│   │   │   │   ├── types.ts
-│   │   │   │   └── utils.ts
-│   │   │   ├── locales
-│   │   │   │   ├── DO_NOT_TOUCH
-│   │   │   │   │   ├── ar.json
-│   │   │   │   │   ├── es.json
-│   │   │   │   │   └── he.json
-│   │   │   │   └── en.json
-│   │   │   ├── types.ts
-│   │   │   └── utils.ts
-│   │   ├── routes
-│   │   │   ├── +layout.css
-│   │   │   ├── +layout.svelte
-│   │   │   └── +page.svelte
-│   │   └── app.html
-│   ├── static
-│   │   ├── app-logo.png
-│   │   ├── favicon.png
-│   │   └── screen-v0.0.1.png
-│   ├── .gitignore
-│   ├── package.json
-│   ├── svelte.config.js
-│   ├── tsconfig.json
-│   ├── vercel.json
-│   └── vite.config.js
 ├── static
+│   ├── sounds
+│   │   ├── walkie-click-start.wav
+│   │   └── walkie-static.wav
 │   ├── app-logo.png
 │   ├── favicon.png
 │   └── screen-v0.0.1.png
@@ -272,12 +284,11 @@
 ├── .prettierrc
 ├── .vercelignore
 ├── AGENTS.md
-├── CARTESIA_TTS_PLAN.md
 ├── CHANGELOG.md
 ├── CLAUDE.md
+├── COPYSPEAK_PI_VOICE.md
 ├── LICENCE.txt
 ├── README.md
-├── app-logo.png
 ├── components.json
 ├── file-structure.txt
 ├── install-kittentts.ps1
@@ -286,6 +297,7 @@
 ├── skills-lock.json
 ├── svelte.config.js
 ├── tsconfig.json
+├── vercel.json
 ├── vite.config.js
 ├── vitest-plugin-mock-state.ts
 └── vitest.config.ts

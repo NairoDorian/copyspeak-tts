@@ -156,7 +156,7 @@
 
 {#if isWeb}
   <ModeWatcher />
-  <div class="bg-background h-screen overflow-y-auto overflow-x-auto" dir={$isRtl ? "rtl" : "ltr"}>
+  <div class="bg-background h-screen overflow-x-auto overflow-y-auto" dir={$isRtl ? "rtl" : "ltr"}>
     <header class="border-border bg-background sticky top-0 z-50 border-b">
       <div class="mx-auto flex max-w-5xl items-center justify-between px-6 py-3">
         <a href="/" class="flex items-center gap-3">

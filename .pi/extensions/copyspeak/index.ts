@@ -57,7 +57,8 @@ export default function (pi: ExtensionAPI) {
     const streamEvent = (event as any).assistantMessageEvent;
     if (streamEvent?.type !== "thinking_end") return;
 
-    const content = streamEvent.content || findThinkingContent((event as any).message, streamEvent.contentIndex);
+    const content =
+      streamEvent.content || findThinkingContent((event as any).message, streamEvent.contentIndex);
     if (!content) return;
 
     const key = `${streamEvent.contentIndex ?? "unknown"}:${content}`;
@@ -83,7 +84,8 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("copyspeak", {
-    description: "Control CopySpeak voice notifications: on/off/status/test/engine <cartesia|openai|elevenlabs|local>",
+    description:
+      "Control CopySpeak voice notifications: on/off/status/test/engine <cartesia|openai|elevenlabs|local>",
     handler: async (args, ctx) => {
       const [cmd, value] = args.trim().split(/\s+/);
       try {
@@ -93,14 +95,24 @@ export default function (pi: ExtensionAPI) {
         }
         if (cmd === "on") state.enabled = true;
         else if (cmd === "off") state.enabled = false;
-        else if (cmd === "test") await speakSafe(args.replace(/^test\s*/, "") || "CopySpeak voice hook is online with walkie talkie effect.", ctx, true);
+        else if (cmd === "test")
+          await speakSafe(
+            args.replace(/^test\s*/, "") ||
+              "CopySpeak voice hook is online with walkie talkie effect.",
+            ctx,
+            true
+          );
         else if (cmd === "engine") {
-          if (!isEngine(value)) throw new Error("engine must be cartesia, openai, elevenlabs, or local");
+          if (!isEngine(value))
+            throw new Error("engine must be cartesia, openai, elevenlabs, or local");
           state.engine = value;
         } else if (cmd === "activity") state.speakActivity = value !== "off";
         else if (cmd === "assistant") state.speakAssistant = value !== "off";
         else if (cmd === "thinking") state.speakThinking = value !== "off";
-        else throw new Error("usage: /copyspeak on|off|status|test [text]|engine <engine>|activity on|off|assistant on|off|thinking on|off");
+        else
+          throw new Error(
+            "usage: /copyspeak on|off|status|test [text]|engine <engine>|activity on|off|assistant on|off|thinking on|off"
+          );
         ctx.ui.setStatus("copyspeak", statusText());
         ctx.ui.notify(statusText(), "info");
       } catch (error) {
@@ -167,7 +179,9 @@ async function postSpeak(text: string) {
       (res) => {
         let responseBody = "";
         res.setEncoding("utf8");
-        res.on("data", (chunk) => { responseBody += chunk; });
+        res.on("data", (chunk) => {
+          responseBody += chunk;
+        });
         res.on("end", () => {
           if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) resolve();
           else reject(new Error(`HTTP ${res.statusCode}: ${responseBody}`));
@@ -207,7 +221,6 @@ function findBuiltCopySpeak() {
   ];
   return candidates.find(existsSync);
 }
-
 
 function findThinkingContent(message: any, contentIndex: number | undefined): string {
   const content = message?.content;
@@ -259,4 +272,3 @@ function envBool(name: string, fallback: boolean) {
   if (value == null || value === "") return fallback;
   return !/^(0|false|no|off)$/i.test(value);
 }
-

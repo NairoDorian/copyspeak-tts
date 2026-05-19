@@ -72,8 +72,7 @@
         <Select
           options={effectOptions}
           value={activeEffect}
-          onchange={(e: Event) =>
-            handleEffectChange((e.target as HTMLSelectElement).value)}
+          onchange={(e: Event) => handleEffectChange((e.target as HTMLSelectElement).value)}
           class="w-44"
         />
       </SettingRow>

@@ -114,12 +114,7 @@ class PlaybackStore {
     }
     const effect = getEffect(effectId);
     let blob: Blob;
-    if (
-      !this.shouldApplyWindowsPreroll() &&
-      pitchRatio === 1.0 &&
-      !effect &&
-      this._originalBytes
-    ) {
+    if (!this.shouldApplyWindowsPreroll() && pitchRatio === 1.0 && !effect && this._originalBytes) {
       const mimeType = detectAudioMimeType(this._originalBytes);
       blob = new Blob([this._originalBytes], { type: mimeType });
     } else if (this._decodedBuffer && this._audioCtx) {
