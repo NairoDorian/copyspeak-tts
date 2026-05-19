@@ -8,12 +8,14 @@
 ## Unit Test Plan
 
 ### `project.py` (4 tests)
+
 - create default project schema/config
 - save/load round trip
 - reject invalid schema
 - set config validates unknown keys
 
 ### `queue.py` (4 tests)
+
 - add text item
 - reject blank text
 - remove existing item
@@ -30,11 +32,13 @@
 ## Realistic Workflow Scenarios
 
 ### Quick clipboard-style phrase export
+
 - Simulates: user copying a sentence and saving speech output.
 - Operations chained: project new → queue add → export text.
 - Verified: project JSON, queue state, real audio file format.
 
 ### Batch narration queue
+
 - Simulates: agent preparing multiple snippets for playback/history.
 - Operations chained: create project → add several queue items → export queue.
 - Verified: multiple non-empty audio outputs and project history entries.

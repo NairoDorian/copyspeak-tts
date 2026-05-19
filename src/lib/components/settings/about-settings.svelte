@@ -1,9 +1,11 @@
 <script lang="ts">
   import { Label } from "$lib/components/ui/label/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { SettingRow } from "$lib/components/ui/setting-row/index.js";
   import { Switch } from "$lib/components/ui/switch/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import InfoTooltip from "$lib/components/ui/info-tooltip.svelte";
+  import UpdateChecker from "$lib/components/update-checker.svelte";
   import { openExternal } from "$lib/utils/external-link";
   import { invoke } from "@tauri-apps/api/core";
   import { VERSION } from "$lib/version";
@@ -52,20 +54,15 @@
 
 <div class="space-y-4">
   <!-- Version -->
-  <div class="flex items-center justify-between">
-    <div class="flex items-center gap-1.5">
-      <Label>{$_("settings.about.version")}</Label>
-      <InfoTooltip text={$_("settings.about.versionDescription")} />
-    </div>
+  <SettingRow
+    label={$_("settings.about.version")}
+    tooltip={$_("settings.about.versionDescription")}
+  >
     <span class="text-muted-foreground font-mono text-sm">v{VERSION}</span>
-  </div>
+  </SettingRow>
 
   <!-- Check for Updates -->
-  <div class="flex items-center justify-between">
-    <div class="flex items-center gap-1.5">
-      <Label>Check for Updates</Label>
-      <InfoTooltip text="Automatically check for new versions on startup" />
-    </div>
+  <SettingRow label="Check for Updates" tooltip="Automatically check for new versions on startup">
     <Switch
       id="update-checks"
       checked={localConfig.general.update_checks_enabled ?? true}
@@ -73,14 +70,21 @@
         localConfig.general.update_checks_enabled = v;
       }}
     />
-  </div>
+  </SettingRow>
+
+  <SettingRow label="Update Status">
+    <UpdateChecker
+      enabled={localConfig.general.update_checks_enabled ?? true}
+      autoCheckOnMount={false}
+      listenForBackendEvent={false}
+    />
+  </SettingRow>
 
   <!-- Source Code -->
-  <div class="flex items-center justify-between">
-    <div class="flex items-center gap-1.5">
-      <Label>{$_("settings.about.sourceCode")}</Label>
-      <InfoTooltip text={$_("settings.about.sourceCodeDescription")} />
-    </div>
+  <SettingRow
+    label={$_("settings.about.sourceCode")}
+    tooltip={$_("settings.about.sourceCodeDescription")}
+  >
     <Button
       variant="outline"
       size="sm"
@@ -88,17 +92,13 @@
     >
       {$_("settings.about.github")}
     </Button>
-  </div>
+  </SettingRow>
 
   {#if showDebugMode}
-    <div class="border-border border-t pt-4">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-1.5">
-          <Label>Debug Mode</Label>
-          <InfoTooltip text="Enable verbose logging and additional status info" />
-        </div>
+    <div>
+      <SettingRow label="Debug Mode" tooltip="Enable verbose logging and additional status info">
         <Switch id="debug-mode" bind:checked={localConfig.general.debug_mode} />
-      </div>
+      </SettingRow>
 
       {#if localConfig.general.debug_mode}
         <div class="mt-4 space-y-2">

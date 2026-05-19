@@ -1,9 +1,6 @@
 <script lang="ts">
-  // TODO: Re-enable i18n when ready for multi-language support
-  // import { _ } from "svelte-i18n";
   import Github from "$lib/components/icons/github.svelte";
-  // TODO: Re-enable LanguageSwitcher when i18n is re-enabled
-  // import LanguageSwitcher from "./language-switcher.svelte";
+  import LanguageSwitcher from "./language-switcher.svelte";
 
   const GITHUB_URL = "https://github.com/ilyaizen/CopySpeak";
 </script>
@@ -17,9 +14,7 @@
       </div>
 
       <div class="flex items-center gap-6">
-        <!-- TODO: Re-enable LanguageSwitcher when i18n is re-enabled -->
-        <!-- <LanguageSwitcher /> -->
-        <span class="text-muted-foreground text-sm">English</span>
+        <LanguageSwitcher />
 
         <a
           href={GITHUB_URL}

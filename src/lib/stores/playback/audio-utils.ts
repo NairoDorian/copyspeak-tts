@@ -46,6 +46,27 @@ export function buildBarValues(dataArray: Uint8Array, numBars: number): number[]
   return bars;
 }
 
+export function prependLowLevelPreroll(buffer: AudioBuffer, durationMs: number): AudioBuffer {
+  const prerollLength = Math.round((buffer.sampleRate * durationMs) / 1000);
+  if (prerollLength <= 0) return buffer;
+
+  const output = new AudioBuffer({
+    length: prerollLength + buffer.length,
+    numberOfChannels: buffer.numberOfChannels,
+    sampleRate: buffer.sampleRate
+  });
+
+  for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+    const data = output.getChannelData(channel);
+    for (let i = 0; i < prerollLength; i++) {
+      data[i] = Math.sin((2 * Math.PI * 60 * i) / buffer.sampleRate) * 0.00002;
+    }
+    data.set(buffer.getChannelData(channel), prerollLength);
+  }
+
+  return output;
+}
+
 /**
  * Convert AudioBuffer to WAV Blob
  */

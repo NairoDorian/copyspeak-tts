@@ -11,6 +11,7 @@ interface WalkieSamples {
   static: AudioBuffer | null;
 }
 
+let cachedCtx: AudioContext | null = null;
 let cachedSamples: Promise<WalkieSamples> | null = null;
 
 async function loadSample(ctx: AudioContext, url: string): Promise<AudioBuffer | null> {
@@ -26,7 +27,8 @@ async function loadSample(ctx: AudioContext, url: string): Promise<AudioBuffer |
 }
 
 async function loadSamples(ctx: AudioContext): Promise<WalkieSamples> {
-  if (!cachedSamples) {
+  if (cachedCtx !== ctx || !cachedSamples) {
+    cachedCtx = ctx;
     cachedSamples = Promise.all([loadSample(ctx, CLICK_URL), loadSample(ctx, STATIC_URL)]).then(
       ([click, staticNoise]) => ({ click, static: staticNoise })
     );
@@ -34,9 +36,9 @@ async function loadSamples(ctx: AudioContext): Promise<WalkieSamples> {
   return cachedSamples;
 }
 
-function buildSoftClipCurve(amount = 0.18): Float32Array<ArrayBuffer> {
+function buildSoftClipCurve(amount = 0.18): Float32Array {
   const n = 4096;
-  const curve = new Float32Array(new ArrayBuffer(n * Float32Array.BYTES_PER_ELEMENT));
+  const curve = new Float32Array(n);
   const k = amount * 8;
   for (let i = 0; i < n; i++) {
     const x = (i * 2) / n - 1;

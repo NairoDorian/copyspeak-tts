@@ -10,12 +10,23 @@
   import type { AppConfig } from "$lib/types";
   import { VERSION } from "$lib/version";
 
+  let {
+    autoCheckOnMount = true,
+    listenForBackendEvent = true,
+    enabled
+  }: {
+    autoCheckOnMount?: boolean;
+    listenForBackendEvent?: boolean;
+    enabled?: boolean;
+  } = $props();
+
   let updateAvailable = $state(false);
   let isChecking = $state(false);
   let isInstalling = $state(false);
   let downloadProgress = $state(0);
   let showUpToDate = $state(false);
   let updateChecksEnabled = $state(true);
+  let effectiveUpdateChecksEnabled = $derived(enabled ?? updateChecksEnabled);
   let errorMessage = $state<string | null>(null);
 
   let unlisten: (() => void) | null = null;
@@ -35,13 +46,15 @@
     }
 
     // Listen for update check events from backend
-    const unlistenEvent = await listen("check-for-updates", () => {
-      handleManualCheck();
-    });
-    unlisten = unlistenEvent;
+    if (listenForBackendEvent) {
+      const unlistenEvent = await listen("check-for-updates", () => {
+        handleManualCheck();
+      });
+      unlisten = unlistenEvent;
+    }
 
     // Auto-check on startup if enabled
-    if (updateChecksEnabled) {
+    if (autoCheckOnMount && effectiveUpdateChecksEnabled) {
       checkForUpdates();
     }
   });
@@ -61,7 +74,7 @@
   }
 
   async function checkForUpdates() {
-    if (!updateChecksEnabled || isChecking) return;
+    if (!effectiveUpdateChecksEnabled || isChecking) return;
 
     try {
       isChecking = true;
@@ -116,7 +129,7 @@
   }
 
   async function installUpdate() {
-    if (!updateChecksEnabled) return;
+    if (!effectiveUpdateChecksEnabled) return;
 
     try {
       isInstalling = true;
@@ -156,7 +169,7 @@
   }
 
   function getStatusText(): string {
-    if (!updateChecksEnabled) return "Updates disabled";
+    if (!effectiveUpdateChecksEnabled) return "Updates disabled";
     if (isInstalling) {
       if (downloadProgress > 0 && downloadProgress < 100) {
         return `Downloading ${downloadProgress}%`;
@@ -171,7 +184,7 @@
   }
 
   function handleClick() {
-    if (!updateChecksEnabled || isChecking || isInstalling) return;
+    if (!effectiveUpdateChecksEnabled || isChecking || isInstalling) return;
     if (updateAvailable) {
       installUpdate();
     } else {
@@ -189,7 +202,7 @@
 
   <button
     onclick={handleClick}
-    disabled={!updateChecksEnabled || isChecking || isInstalling}
+    disabled={!effectiveUpdateChecksEnabled || isChecking || isInstalling}
     class={cn(
       "text-xs transition-colors disabled:opacity-50",
       errorMessage

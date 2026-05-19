@@ -4,7 +4,7 @@
   import { toast } from "svelte-sonner";
   import { goto } from "$app/navigation";
   import type { AppConfig } from "$lib/types";
-  import InfoTooltip from "../ui/info-tooltip.svelte";
+  import { SettingRow } from "$lib/components/ui/setting-row/index.js";
   import { Upload, Download, RotateCcw, Copy } from "@lucide/svelte";
   import { _ } from "svelte-i18n";
 
@@ -150,30 +150,22 @@
 </script>
 
 <!-- Settings: unified Export / Import / Reset -->
-<div class="border-border mb-4 border-b pb-4">
-  <div class="flex items-center justify-between">
-    <div>
-      <div class="flex items-center gap-1.5">
-        <p class="text-sm font-medium">Import / Export</p>
-        <InfoTooltip text="Export, import, or reset your settings" />
-      </div>
-    </div>
-    <div class="flex gap-2">
-      <Button variant="outline" size="sm" onclick={openExportDialog}>
-        <Upload class="mr-1.5" size={14} />
-        Export
-      </Button>
-      <Button variant="outline" size="sm" onclick={openImportDialog}>
-        <Download class="mr-1.5" size={14} />
-        Import
-      </Button>
-      <Button variant="destructive" size="sm" onclick={() => (showResetDialog = true)}>
-        <RotateCcw class="mr-1.5" size={14} />
-        Reset
-      </Button>
-    </div>
+<SettingRow label="Import / Export" tooltip="Export, import, or reset your settings">
+  <div class="flex gap-2">
+    <Button variant="outline" size="sm" onclick={openExportDialog}>
+      <Upload class="mr-1.5" size={14} />
+      Export
+    </Button>
+    <Button variant="outline" size="sm" onclick={openImportDialog}>
+      <Download class="mr-1.5" size={14} />
+      Import
+    </Button>
+    <Button variant="destructive" size="sm" onclick={() => (showResetDialog = true)}>
+      <RotateCcw class="mr-1.5" size={14} />
+      Reset
+    </Button>
   </div>
-</div>
+</SettingRow>
 
 <!-- Export Dialog -->
 {#if showExportDialog}
