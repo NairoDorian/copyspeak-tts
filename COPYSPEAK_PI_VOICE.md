@@ -1,12 +1,12 @@
-# CopySpeak Pi Voice Extension
+# CopySpeak Pi Extension
 
-Project-local Pi extension: `.pi/extensions/copyspeak-voice/`.
+Project-local Pi extension: `.pi/extensions/copyspeak/`.
 
 ## What it does
 
-- Speaks Pi agent activity through CopySpeak.
-- Configures `%APPDATA%/CopySpeak/config.json` for the selected TTS engine and `walkie_talkie` effect.
-- Triggers speech through CopySpeak's existing double-copy listener.
+- Speaks final Pi assistant responses through the running CopySpeak app by default.
+- Optionally speaks agent/tool activity and thinking blocks.
+- Triggers speech through CopySpeak's local control server, not the Windows clipboard.
 
 ## Setup
 
@@ -14,36 +14,33 @@ Set any API keys and start Pi from this repository:
 
 ```powershell
 $env:CARTESIA_API_KEY="..."
-$env:COPYSPEAK_PI_ENGINE="cartesia"
-$env:COPYSPEAK_EXE="D:\GitHub\CopySpeak\src-tauri\target\release\copyspeak.exe"
+$env:COPYSPEAK_PI_ENGINE="cartesia" # optional override; omit to use app settings
 pi
 ```
 
-If `COPYSPEAK_EXE` is omitted, the extension looks for release/debug `copyspeak.exe` under `src-tauri/target/`.
+Start CopySpeak yourself before using the extension. If `COPYSPEAK_PI_LAUNCH=1` is set, the extension looks for release/debug `copyspeak.exe` under `src-tauri/target/` and launches it when needed.
 
 ## Commands
 
 ```text
-/copyspeak-voice status
-/copyspeak-voice on
-/copyspeak-voice off
-/copyspeak-voice test hello from pi
-/copyspeak-voice engine cartesia|openai|elevenlabs|local
-/copyspeak-voice activity on|off
-/copyspeak-voice assistant on|off
+/copyspeak status
+/copyspeak on
+/copyspeak off
+/copyspeak test hello from pi
+/copyspeak engine cartesia|openai|elevenlabs|local
+/copyspeak activity on|off
+/copyspeak assistant on|off
+/copyspeak thinking on|off
 ```
 
 ## Environment flags
 
 - `COPYSPEAK_PI_ENABLED=0` disables voice on startup.
-- `COPYSPEAK_PI_ENGINE=cartesia|openai|elevenlabs|local` selects engine.
+- `COPYSPEAK_PI_ENGINE=cartesia|openai|elevenlabs|local` overrides the running app engine.
+- `COPYSPEAK_PI_EFFECT=walkie_talkie` overrides the running app effect.
 - `COPYSPEAK_PI_ASSISTANT=0` disables final assistant-message speech.
-- `COPYSPEAK_PI_ACTIVITY=0` disables thinking/tool announcements.
+- `COPYSPEAK_PI_ACTIVITY=1` enables thinking/tool announcements.
+- `COPYSPEAK_PI_THINKING=0` disables spoken thinking blocks.
 - `COPYSPEAK_PI_MAX_CHARS=700` limits final response speech length.
-- `COPYSPEAK_PI_LAUNCH=0` prevents launching CopySpeak.
-
-## Loop/focus behavior
-
-The extension serializes clipboard triggers and writes only one double-copy sequence per spoken message: a unique primer, then two identical clipboard writes. This avoids stale clipboard state retriggering additional cycles.
-
-When Pi starts, the extension checks whether `copyspeak.exe` is already running before launching it. This avoids triggering CopySpeak's single-instance focus behavior while using Pi.
+- `COPYSPEAK_PI_LAUNCH=1` enables auto-launching CopySpeak.
+- `COPYSPEAK_CONTROL_URL=http://127.0.0.1:43117/speak` overrides the local control endpoint.

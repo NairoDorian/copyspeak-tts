@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **CopySpeak Pi extension** — Removed the stale `.pi/extensions/copyspeak-voice` extension so only `/copyspeak` is registered.
+- **Vercel deployments** — Added a repository `ignoreCommand` that runs production builds and skips preview builds.
+
 ## [0.1.3] - 2026-05-19
 
 ### Added
@@ -42,12 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **CopySpeak Pi voice extension** — Switched Pi speech triggering from clipboard double-copy writes to the local CopySpeak control server, avoiding primer speech and Windows clipboard failures.
-- **CopySpeak Pi voice extension** — Disabled activity/tool announcements by default so normal use only speaks final assistant responses unless `/copyspeak activity on` is enabled.
-- **CopySpeak Pi voice extension** — Now speaks only once after an agent run completes and no longer auto-launches CopySpeak unless `COPYSPEAK_PI_LAUNCH=1` is set.
-- **CopySpeak Pi voice extension** — Added a two-minute duplicate speech guard to avoid charging TTS credits for repeated final messages.
-- **CopySpeak Pi voice extension** — Uses the running app's engine/effect settings by default and can include Pi thinking blocks in spoken assistant responses.
-- **CopySpeak Pi voice extension** — Speaks Pi thinking blocks as soon as each thinking block finishes streaming, while avoiding replaying those blocks in the final response.
+- **CopySpeak Pi extension** — Switched Pi speech triggering from clipboard double-copy writes to the local CopySpeak control server, avoiding primer speech and Windows clipboard failures.
+- **CopySpeak Pi extension** — Disabled activity/tool announcements by default so normal use only speaks final assistant responses unless `/copyspeak activity on` is enabled.
+- **CopySpeak Pi extension** — Now speaks only once after an agent run completes and no longer auto-launches CopySpeak unless `COPYSPEAK_PI_LAUNCH=1` is set.
+- **CopySpeak Pi extension** — Added a two-minute duplicate speech guard to avoid charging TTS credits for repeated final messages.
+- **CopySpeak Pi extension** — Uses the running app's engine/effect settings by default and can include Pi thinking blocks in spoken assistant responses.
+- **CopySpeak Pi extension** — Speaks Pi thinking blocks as soon as each thinking block finishes streaming, while avoiding replaying those blocks in the final response.
 - **CopySpeak control server** — Fixed `Content-Length` parsing so `/speak` accepts normal HTTP POST bodies from Pi, curl, and other clients.
 - **CopySpeak control server** — `/speak` now waits for speech generation to complete before responding, allowing Pi extension requests to queue synthesis instead of overlapping.
 - **Playback queue** — Single `audio-ready` events now use the existing fragment queue so Pi-generated thinking and final responses play sequentially instead of interrupting each other.
@@ -87,8 +92,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **CopySpeak Pi voice extension** — Switched Pi speech triggering from clipboard double-copy writes to the local CopySpeak control server, avoiding primer speech and Windows clipboard failures.
-- **CopySpeak Pi voice extension** — Disabled activity/tool announcements by default so normal use only speaks final assistant responses unless `/copyspeak-voice activity on` is enabled.
+- **CopySpeak Pi extension** — Switched Pi speech triggering from clipboard double-copy writes to the local CopySpeak control server, avoiding primer speech and Windows clipboard failures.
+- **CopySpeak Pi extension** — Disabled activity/tool announcements by default so normal use only speaks final assistant responses unless `/copyspeak activity on` is enabled.
 - **CopySpeak control server** — Fixed `Content-Length` parsing so `/speak` accepts normal HTTP POST bodies from Pi, curl, and other clients.
 
 ## [0.1.0] - 2026-03-27
@@ -111,7 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **CopySpeak Pi voice extension** — Reworked clipboard triggering to serialize double-copy events and avoid repeated trigger loops; startup now avoids focusing an already-running CopySpeak instance.
+- **CopySpeak Pi extension** — Reworked clipboard triggering to serialize double-copy events and avoid repeated trigger loops; startup now avoids focusing an already-running CopySpeak instance.
 
 - **Windows CLI backend PATH resolution** — Expanded PATH for finding Python/uv tools on Windows
   - Added `get_expanded_path()` to include common Python and uv installation paths
