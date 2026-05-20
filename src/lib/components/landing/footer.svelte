@@ -1,5 +1,6 @@
 <script lang="ts">
   import Github from "$lib/components/icons/github.svelte";
+  import { VERSION } from "$lib/version";
   // import LanguageSwitcher from "./language-switcher.svelte";
 
   const GITHUB_URL = "https://github.com/ilyaizen/CopySpeak";
@@ -10,7 +11,7 @@
     <div class="flex flex-col items-center justify-between gap-4 sm:flex-row">
       <div class="flex items-center gap-3">
         <img src="/app-logo.png" alt="CopySpeak" class="h-8 w-8" />
-        <span class="text-foreground font-mono text-sm font-semibold">CopySpeak</span>
+        <span class="text-foreground font-mono text-sm font-semibold">CopySpeak v{VERSION}</span>
       </div>
 
       <div class="flex items-center gap-6">

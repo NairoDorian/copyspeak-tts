@@ -1,7 +1,7 @@
 {
   "app": {
     "title": "CopySpeak",
-    "tagline": "Double-copy → instant speech"
+    "tagline": "AI text-to-speech for your clipboard"
   },
   "nav": {
     "play": "Play",
@@ -496,7 +496,7 @@
   "landing": {
     "hero": {
       "title": "CopySpeak",
-      "subtitle": "Double-copy → instant speech",
+      "subtitle": "",
       "description": "A lightweight Windows app that reads clipboard text aloud using AI text-to-speech engines.",
       "download": "Download for Windows",
       "github": "View on GitHub",
@@ -532,7 +532,7 @@
     "screenshots": {
       "title": "Screenshots",
       "subtitle": "See CopySpeak in action",
-      "caption": "CopySpeak v0.0.1 — Main interface with Play tab"
+      "caption": "CopySpeak v0.1.4 — Main interface with Play tab"
     },
     "footer": {
       "github": "GitHub",

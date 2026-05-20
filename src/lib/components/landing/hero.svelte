@@ -3,6 +3,7 @@
   import { Download } from "@lucide/svelte";
   import Github from "$lib/components/icons/github.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { VERSION } from "$lib/version";
 
   const DOWNLOAD_URL = "https://github.com/ilyaizen/CopySpeak/releases";
   const GITHUB_URL = "https://github.com/ilyaizen/CopySpeak";
@@ -18,11 +19,7 @@
       {$_("landing.hero.title")}
     </h1>
 
-    <p class="text-muted-foreground mt-4 text-lg sm:text-xl">
-      {$_("landing.hero.subtitle")}
-    </p>
-
-    <p class="text-muted-foreground mt-2 text-base">
+    <p class="text-muted-foreground mt-4 text-base">
       {$_("landing.hero.description")}
     </p>
 
@@ -39,7 +36,7 @@
     </div>
 
     <p class="text-muted-foreground mt-6 text-sm">
-      {$_("landing.hero.version", { values: { version: "0.1.1" } })}
+      {$_("landing.hero.version", { values: { version: VERSION } })}
     </p>
   </div>
 </section>

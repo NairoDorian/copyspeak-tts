@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Vercel landing page** — Updated the displayed version, screenshot asset, and removed the double-copy hero tagline.
+
 ## [0.1.4] - 2026-05-20
 
 ### Added
