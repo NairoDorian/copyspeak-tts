@@ -13,7 +13,7 @@
   import { TooltipProvider } from "$lib/components/ui/tooltip/index.js";
   import GlobalPlayer from "$lib/components/global-player.svelte";
   import { playbackStore } from "$lib/stores/playback-store.svelte";
-  import { setLocale } from "$lib/i18n";
+  import { setLocale, waitForI18nReady } from "$lib/i18n";
   import { isRtl } from "$lib/i18n/store";
   import ThemeToggle from "$lib/components/theme-toggle.svelte";
 
@@ -77,6 +77,9 @@
       return;
     }
 
+    // Wait for i18n to be ready before syncing locale
+    await waitForI18nReady();
+
     // Sync appearance with config on app load
     try {
       const config = await invoke<AppConfig>("get_config");
@@ -93,8 +96,15 @@
 
       // Sync locale
       const savedLocale = config.general.locale;
-      if (savedLocale) {
+      // Only English is supported at the moment because other locales are managed externally
+      // and may have unstable keys during pre-production.
+      if (savedLocale === "en") {
         setLocale(savedLocale);
+      } else {
+        if (savedLocale) {
+          console.warn(`Locale ${savedLocale} is not supported yet, falling back to en`);
+        }
+        setLocale("en");
       }
 
       const { volume, playback_speed, pitch } = config.playback;
