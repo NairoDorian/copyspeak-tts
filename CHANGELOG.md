@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Persistent Piper TTS RAM caching** — Keeps the Piper voice model loaded in RAM using a background HTTP server process (`piper.http_server`) on a free localhost port. Speeds up consecutive synthesis triggers to near-instantaneous.
 - **CUDA/GPU acceleration for Piper** — Added a CUDA option to the UI and configuration, enabling GPU-accelerated local inference if available.
+- **PowerShell CUDA setup script** — Added a `setup-piper-cuda.ps1` script to automate installing `piper-tts[http]`, `onnxruntime-gpu`, and all PyPI-based NVIDIA runtime library dependencies.
+- **Automatic CUDA DLL path discovery** — Rust backend now queries Python on startup to locate pip-installed NVIDIA runtime paths (like `cublas`, `cudnn`, etc.) and adds them to the environment `PATH` when spawning the server, making GPU acceleration work fully out-of-the-box on Windows.
 - **Dynamic local Piper voice discovery** — Automatically scans the `piper-voices` folder and lists all downloaded quality variations (low, medium, high) dynamically in the dropdown.
 - **"Unload Model" system tray action** — Added a menu item to the tray context menu to manually terminate the background server and unload the model from RAM.
 - **New Rust IPC commands** — Added `get_local_piper_voices` to discover available models and `unload_piper_model` to allow manual unloading of the cached model.

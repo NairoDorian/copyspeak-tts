@@ -202,23 +202,49 @@ Default model is `nano` (fastest, smallest). Change via `--model` flag in CLI.
 
 ### Piper
 
-[Piper](https://github.com/OHF-Voice/piper1-gpl) (piper1-gpl) is a fast, offline neural TTS engine with many EN US voices.
+[Piper](https://github.com/OHF-Voice/piper1-gpl) (piper1-gpl) is a fast, local offline neural TTS engine. CopySpeak optimizes Piper performance by running a persistent background server, keeping the model loaded in RAM to eliminate reload latency.
 
-**Installation:**
+#### 1. Setup & Automation
 
-```bash
-pip install piper
+To automate installing Piper and setting up GPU/CUDA acceleration on Windows, run the helper script in the project root:
+
+```powershell
+# Run in PowerShell
+./setup-piper-cuda.ps1
 ```
 
-**Model download** — place `.onnx` + `.onnx.json` files in `%APPDATA%\CopySpeak\`:
+This script will automatically:
+- Install `piper-tts` with HTTP support.
+- Uninstall conflicting CPU onnxruntime libraries.
+- Install `onnxruntime-gpu` and its official NVIDIA PyPI library dependencies (`nvidia-cuda-runtime-cu12`, `nvidia-cudnn-cu12`, etc.) to run on the GPU out-of-the-box.
 
+#### 2. Manual Installation
+
+##### For CPU-Only Inference:
 ```bash
-# Example: download joe-medium
-python3 -m piper.download_voices en_US-joe-medium
-# Then move the files into %APPDATA%\CopySpeak\
+pip install "piper-tts[http]"
 ```
 
-**Preset Configuration** (auto-applied when "Piper TTS" preset is selected):
+##### For CUDA/GPU Acceleration:
+1. Ensure you have modern NVIDIA drivers and a CUDA-compatible GPU.
+2. Uninstall CPU onnxruntime and install GPU/NVIDIA packages:
+```bash
+pip uninstall onnxruntime
+pip install onnxruntime-gpu nvidia-cuda-runtime-cu12 nvidia-cudnn-cu12 nvidia-cublas-cu12 nvidia-cufft-cu12 nvidia-curand-cu12 nvidia-cusolver-cu12 nvidia-cusparse-cu12 nvidia-nvjitlink-cu12
+```
+
+#### 3. Voice Model Downloads
+
+All `.onnx` and `.onnx.json` files must be placed in a folder named `piper-voices` in your user home directory:
+`C:\Users\<User>\piper-voices`
+
+You can download voices via python:
+```bash
+python3 -m piper.download_voices en_US-joe-medium --data-dir C:\Users\<User>\piper-voices
+```
+CopySpeak automatically scans this directory on startup and populates the dropdown voice menu dynamically with all quality variations (low, medium, high).
+
+#### 4. Preset Configuration (applied automatically when "Piper" is selected):
 
 ```json
 {

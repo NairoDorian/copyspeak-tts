@@ -189,6 +189,26 @@ fn get_expanded_path() -> String {
     paths.join(";")
 }
 
+#[cfg(windows)]
+fn get_nvidia_dll_paths(python_executable: &str) -> Option<String> {
+    let output = Command::new(python_executable)
+        .args(&[
+            "-c",
+            "import os, nvidia; print(';'.join([os.path.join(os.path.dirname(nvidia.__file__), p, 'bin') for p in ['cublas', 'cuda_nvrtc', 'cuda_runtime', 'cudnn', 'cufft', 'curand', 'cusolver', 'cusparse', 'nvjitlink'] if os.path.exists(os.path.join(os.path.dirname(nvidia.__file__), p, 'bin'))]))"
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+        
+    if output.status.success() {
+        let paths_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !paths_str.is_empty() {
+            return Some(paths_str);
+        }
+    }
+    None
+}
+
 pub struct CliTtsBackend {
     pub command: String,
     pub args_template: Vec<String>,
@@ -433,7 +453,16 @@ impl CliTtsBackend {
                 .stderr(Stdio::piped());
 
             #[cfg(windows)]
-            cmd.creation_flags(CREATE_NO_WINDOW);
+            {
+                cmd.creation_flags(CREATE_NO_WINDOW);
+                if cuda {
+                    if let Some(nvidia_paths) = get_nvidia_dll_paths(&self.command) {
+                        let current_path = std::env::var("PATH").unwrap_or_default();
+                        let new_path = format!("{};{}", nvidia_paths, current_path);
+                        cmd.env("PATH", new_path);
+                    }
+                }
+            }
 
             let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn Piper server: {}", e))?;
 
@@ -559,7 +588,13 @@ impl TtsBackend for CliTtsBackend {
         #[cfg(windows)]
         {
             cmd.creation_flags(CREATE_NO_WINDOW);
-            cmd.env("PATH", get_expanded_path());
+            let mut path = get_expanded_path();
+            if self.is_piper() && self.cuda {
+                if let Some(nvidia_paths) = get_nvidia_dll_paths(&self.command) {
+                    path = format!("{};{}", nvidia_paths, path);
+                }
+            }
+            cmd.env("PATH", path);
         }
         let child = cmd
             .spawn()
