@@ -94,6 +94,7 @@ export interface TtsConfig {
   command: string;
   args_template: string[];
   voice: string;
+  cuda?: boolean;
   openai: OpenAIConfig;
   elevenlabs: ElevenLabsConfig;
   cartesia: CartesiaConfig;

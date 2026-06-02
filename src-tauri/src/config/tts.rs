@@ -143,6 +143,8 @@ pub struct TtsConfig {
     pub command: String,
     pub args_template: Vec<String>,
     pub voice: String,
+    #[serde(default)]
+    pub cuda: bool,
 
     // Cloud Configs
     pub openai: OpenAIConfig,
@@ -167,6 +169,7 @@ impl Default for TtsConfig {
                 "{output}".into(),
             ],
             voice: "Rosie".into(),
+            cuda: false,
             openai: OpenAIConfig::default(),
             elevenlabs: ElevenLabsConfig::default(),
             cartesia: CartesiaConfig::default(),

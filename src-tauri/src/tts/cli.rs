@@ -8,12 +8,44 @@
 
 use super::{TtsBackend, TtsError};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+pub struct PiperServerState {
+    pub child: std::process::Child,
+    pub model_name: String,
+    pub port: u16,
+    pub cuda: bool,
+}
+
+pub static PIPER_SERVER: OnceLock<Mutex<Option<PiperServerState>>> = OnceLock::new();
+
+pub fn get_piper_server() -> &'static Mutex<Option<PiperServerState>> {
+    PIPER_SERVER.get_or_init(|| Mutex::new(None))
+}
+
+pub fn unload_piper_model_internal() -> bool {
+    let mut server = get_piper_server().lock().unwrap();
+    if let Some(mut state) = server.take() {
+        log::info!("[TTS] Unloading Piper model: killing server on port {}", state.port);
+        let _ = state.child.kill();
+        true
+    } else {
+        false
+    }
+}
+
+fn get_free_port() -> Option<u16> {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|listener| listener.local_addr())
+        .map(|addr| addr.port())
+        .ok()
+}
 
 #[cfg(windows)]
 fn get_expanded_path() -> String {
@@ -160,13 +192,15 @@ fn get_expanded_path() -> String {
 pub struct CliTtsBackend {
     pub command: String,
     pub args_template: Vec<String>,
+    pub cuda: bool,
 }
 
 impl CliTtsBackend {
-    pub fn new(command: String, args_template: Vec<String>) -> Self {
+    pub fn new(command: String, args_template: Vec<String>, cuda: bool) -> Self {
         Self {
             command,
             args_template,
+            cuda,
         }
     }
 
@@ -283,6 +317,11 @@ impl CliTtsBackend {
             }
         }
 
+        // Auto-inject --cuda for piper if enabled
+        if self.is_piper() && self.cuda {
+            args.push("--cuda".to_string());
+        }
+
         args
     }
 
@@ -303,7 +342,7 @@ impl CliTtsBackend {
     /// Returns the Piper voices directory (e.g. C:\Users\<User>\piper-voices on Windows).
     /// Used to resolve the {data_dir} placeholder so TTS engines can locate model files
     /// stored in the user's home directory without requiring the user to enter a full path.
-    fn data_dir() -> String {
+    pub(crate) fn data_dir() -> String {
         dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
             .join("piper-voices")
@@ -319,6 +358,151 @@ impl CliTtsBackend {
             .to_string_lossy()
             .into_owned()
     }
+
+    fn synthesize_via_server(&self, text: &str, voice: &str) -> Result<Vec<u8>, String> {
+        let cuda = self.cuda;
+        let data_dir = Self::data_dir();
+
+        // Resolve model file path
+        let voice_file = if voice.ends_with(".onnx") {
+            voice.to_string()
+        } else {
+            format!("{}.onnx", voice)
+        };
+        let mut model_path = std::path::PathBuf::from(&data_dir).join(&voice_file);
+        if !model_path.exists() {
+            let alt_path = std::path::PathBuf::from(voice);
+            if alt_path.exists() {
+                model_path = alt_path;
+            } else {
+                return Err(format!("Model file not found: {}", model_path.display()));
+            }
+        }
+
+        let mut server = get_piper_server().lock().unwrap();
+        let mut need_start = true;
+
+        if let Some(ref mut state) = *server {
+            let is_running = match state.child.try_wait() {
+                Ok(None) => true,
+                _ => false,
+            };
+
+            if is_running && state.model_name == voice && state.cuda == cuda {
+                need_start = false;
+            } else {
+                log::info!(
+                    "[TTS] Stopping running Piper server (model: {}, cuda: {}) to start new one (model: {}, cuda: {})",
+                    state.model_name,
+                    state.cuda,
+                    voice,
+                    cuda
+                );
+                let _ = state.child.kill();
+                *server = None;
+            }
+        }
+
+        let port = if need_start {
+            let new_port = get_free_port().ok_or_else(|| "Failed to find a free port".to_string())?;
+            log::info!("[TTS] Starting Piper HTTP server on port {} for model: {}", new_port, voice);
+
+            let mut cmd = Command::new(&self.command);
+            let mut args = vec![
+                "-m".to_string(),
+                "piper.http_server".to_string(),
+                "-m".to_string(),
+                model_path.to_string_lossy().to_string(),
+                "--port".to_string(),
+                new_port.to_string(),
+                "--host".to_string(),
+                "127.0.0.1".to_string(),
+            ];
+
+            if !data_dir.is_empty() {
+                args.push("--data-dir".to_string());
+                args.push(data_dir.clone());
+            }
+
+            if cuda {
+                args.push("--cuda".to_string());
+            }
+
+            cmd.args(&args)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+
+            #[cfg(windows)]
+            cmd.creation_flags(CREATE_NO_WINDOW);
+
+            let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn Piper server: {}", e))?;
+
+            // Poll /voices to check if server is ready
+            let client = reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_millis(500))
+                .build()
+                .map_err(|e| e.to_string())?;
+
+            let url = format!("http://127.0.0.1:{}/voices", new_port);
+            let start = std::time::Instant::now();
+            let mut ready = false;
+
+            while start.elapsed() < std::time::Duration::from_secs(15) {
+                if let Ok(Some(status)) = child.try_wait() {
+                    return Err(format!("Piper server exited prematurely: {:?}", status));
+                }
+
+                if client.get(&url).send().is_ok() {
+                    ready = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+
+            if !ready {
+                let _ = child.kill();
+                return Err("Timeout waiting for Piper server to start".to_string());
+            }
+
+            log::info!("[TTS] Piper HTTP server is ready on port {}", new_port);
+            *server = Some(PiperServerState {
+                child,
+                model_name: voice.to_string(),
+                port: new_port,
+                cuda,
+            });
+            new_port
+        } else {
+            server.as_ref().unwrap().port
+        };
+
+        drop(server);
+
+        // Perform HTTP POST request to synthesize
+        let client = reqwest::blocking::Client::new();
+        let url = format!("http://127.0.0.1:{}/", port);
+        let body = serde_json::json!({
+            "text": text,
+        });
+
+        let response = client
+            .post(&url)
+            .json(&body)
+            .send()
+            .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let err_text = response.text().unwrap_or_default();
+            return Err(format!("HTTP error {}: {}", status, err_text));
+        }
+
+        let bytes = response
+            .bytes()
+            .map_err(|e| format!("Failed to read response bytes: {}", e))?;
+
+        Ok(bytes.to_vec())
+    }
 }
 
 impl TtsBackend for CliTtsBackend {
@@ -327,6 +511,22 @@ impl TtsBackend for CliTtsBackend {
     }
 
     fn synthesize(&self, text: &str, voice: &str, _speed: f32) -> Result<Vec<u8>, TtsError> {
+        if self.is_piper() {
+            log::info!("[TTS] Using persistent Piper server for voice: {}", voice);
+            match self.synthesize_via_server(text, voice) {
+                Ok(bytes) => {
+                    log::info!("[TTS] Piper synthesis via server completed successfully");
+                    return Ok(bytes);
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[TTS] Piper server synthesis failed: {}. Falling back to standard CLI execution.",
+                        e
+                    );
+                }
+            }
+        }
+
         let input_path = Self::input_path();
         let output_path = Self::output_path();
 
@@ -539,7 +739,31 @@ impl TtsBackend for CliTtsBackend {
             // Build args similar to synthesize, but use a test text
             let test_text = "test";
             let test_output = Self::output_path();
-            let args = self.build_args(&Self::input_path(), &test_output, "Rosie", test_text);
+
+            let test_voice = if self.is_piper() {
+                // Find any downloaded voice to use for testing
+                let data_dir = Self::data_dir();
+                let path = std::path::Path::new(&data_dir);
+                let mut found_voice = None;
+                if path.exists() {
+                    if let Ok(entries) = std::fs::read_dir(path) {
+                        for entry in entries.filter_map(|e| e.ok()) {
+                            let p = entry.path();
+                            if p.is_file() && p.extension().map_or(false, |ext| ext == "onnx") {
+                                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                                    found_voice = Some(stem.to_string());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                found_voice.unwrap_or_else(|| "en_US-joe-medium".to_string())
+            } else {
+                "Rosie".to_string()
+            };
+
+            let args = self.build_args(&Self::input_path(), &test_output, &test_voice, test_text);
 
             if crate::logging::is_debug_mode() {
                 log::debug!("[CLI TTS] Health check args: {:?}", args);
@@ -709,6 +933,7 @@ mod tests {
                 "--voice".into(),
                 "{voice}".into(),
             ],
+            false,
         );
         let args = backend.build_args("/tmp/input.txt", "/tmp/out.wav", "af_heart", "hello world");
         assert_eq!(
@@ -721,14 +946,14 @@ mod tests {
     fn test_build_args_legacy_text_placeholder() {
         // Test backward compatibility: {text} should also work as input file path
         let backend =
-            CliTtsBackend::new("test-tts".into(), vec!["{text}".into(), "{output}".into()]);
+            CliTtsBackend::new("test-tts".into(), vec!["{text}".into(), "{output}".into()], false);
         let args = backend.build_args("/tmp/input.txt", "/tmp/out.wav", "af_heart", "hello world");
         assert_eq!(args, vec!["/tmp/input.txt", "/tmp/out.wav"]);
     }
 
     #[test]
     fn test_voice_display_name_extracts_middle_segment() {
-        let backend = CliTtsBackend::new("piper".into(), vec![]);
+        let backend = CliTtsBackend::new("piper".into(), vec![], false);
 
         // Piper voice format: en_US-joe-medium
         assert_eq!(backend.voice_display_name("en_US-joe-medium"), "joe");

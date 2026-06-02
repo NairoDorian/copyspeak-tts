@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Label } from "$lib/components/ui/label/index.js";
   import { Select } from "$lib/components/ui/select/index.js";
+  import { Switch } from "$lib/components/ui/switch/index.js";
   import type { AppConfig } from "$lib/types";
   import { invoke } from "@tauri-apps/api/core";
   import { Alert, AlertTitle, AlertDescription } from "$lib/components/ui/alert/index.js";
@@ -82,8 +83,10 @@
   let dataDir = $state<string | null>(null);
   let homeDir = $state<string | null>(null);
   let previewExpanded = $state(false);
+  let localPiperVoices = $state<{ value: string; label: string }[]>([]);
 
   const isActiveBackend = $derived(localConfig.tts.active_backend === "local");
+  const piperVoicesOptions = $derived(localPiperVoices.length > 0 ? localPiperVoices : PIPER_EN_VOICES);
 
   // Resolved CLI command preview using actual data dir path
   const cliPreview = $derived.by(() => {
@@ -105,6 +108,10 @@
         .replace("{data_dir}", dir)
         .replace("{home_dir}", home)
     );
+
+    if (localConfig.tts.preset === "piper" && localConfig.tts.cuda) {
+      resolvedArgs.push("--cuda");
+    }
 
     // Quote args that contain spaces
     const quotedArgs = resolvedArgs.map((a) => (a.includes(" ") ? `"${a}"` : a));
@@ -132,7 +139,12 @@
     try {
       dataDir = await invoke<string>("get_data_dir");
       homeDir = await invoke<string>("get_home_dir");
-    } catch {
+      const voices = await invoke<{ value: string; label: string }[]>("get_local_piper_voices");
+      if (voices && voices.length > 0) {
+        localPiperVoices = voices;
+      }
+    } catch (e) {
+      console.error("Failed to load local piper voices:", e);
       dataDir = "%USERPROFILE%\\piper-voices";
       homeDir = "%USERPROFILE%";
     }
@@ -157,13 +169,25 @@
     {:else if localConfig.tts.preset === "piper"}
       <Select
         id="tts-voice"
-        options={PIPER_EN_VOICES}
+        options={piperVoicesOptions}
         value={localConfig.tts.voice}
         onchange={(e) => {
           localConfig.tts.voice = (e.target as HTMLSelectElement).value;
         }}
       />
-      <p class="text-muted-foreground text-xs">
+      <div class="flex items-center gap-2 mt-2">
+        <Switch
+          id="tts-cuda"
+          checked={localConfig.tts.cuda ?? false}
+          onchange={(checked) => {
+            localConfig.tts.cuda = checked;
+          }}
+        />
+        <Label for="tts-cuda" class="text-xs cursor-pointer select-none">
+          CUDA GPU Acceleration (Requires CUDA & onnxruntime-gpu)
+        </Label>
+      </div>
+      <p class="text-muted-foreground text-xs mt-1">
         {$_("engine.localEngine.piperModels", {
           values: { dataDir: dataDir ?? "%APPDATA%\\CopySpeak TTS" }
         })}

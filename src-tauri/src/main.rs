@@ -269,7 +269,7 @@ fn main() {
         eprintln!("Failed to initialize logging: {}", e);
     }
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .setup(|app| {
             // --- Load config ---
             let cfg = config::load_or_default();
@@ -332,6 +332,8 @@ fn main() {
             let sep2 = PredefinedMenuItem::separator(app)?;
             let settings_item =
                 MenuItem::with_id(app, "settings", "Settings...", true, Some("Ctrl+,"))?;
+            let unload_item =
+                MenuItem::with_id(app, "unload_model", "Unload Model", true, None::<&str>)?;
             let sep3 = PredefinedMenuItem::separator(app)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, Some("Ctrl+Q"))?;
 
@@ -344,6 +346,7 @@ fn main() {
                     &speak_item,
                     &sep2,
                     &settings_item,
+                    &unload_item,
                     &sep3,
                     &quit_item,
                 ],
@@ -399,6 +402,10 @@ fn main() {
                                     log::error!("Failed to speak from tray: {}", e);
                                 }
                             });
+                        }
+                        "unload_model" => {
+                            log::info!("Tray: Unload Model");
+                            let _ = crate::tts::cli::unload_piper_model_internal();
                         }
                         "settings" => {
                             if let Some(window) = app.get_webview_window("main") {
@@ -682,7 +689,16 @@ fn main() {
             commands::trigger_update_check,
             commands::get_installer_script_path,
             commands::run_kittentts_installer,
+            commands::get_local_piper_voices,
+            commands::unload_piper_model,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running CopySpeak TTS");
+        .build(tauri::generate_context!())
+        .expect("error while building CopySpeak TTS");
+
+    app.run(|_app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            log::info!("App exiting, cleaning up Piper server");
+            let _ = crate::tts::cli::unload_piper_model_internal();
+        }
+    });
 }

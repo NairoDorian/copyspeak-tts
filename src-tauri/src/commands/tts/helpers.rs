@@ -51,6 +51,7 @@ pub(crate) fn create_backend(active: &TtsEngine, tts_config: &TtsConfig) -> Box<
         TtsEngine::Local => Box::new(CliTtsBackend::new(
             tts_config.command.clone(),
             tts_config.args_template.clone(),
+            tts_config.cuda,
         )),
         TtsEngine::OpenAI => Box::new(crate::tts::openai::OpenAiTtsBackend::new(
             tts_config.openai.clone(),

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Persistent Piper TTS RAM caching** — Keeps the Piper voice model loaded in RAM using a background HTTP server process (`piper.http_server`) on a free localhost port. Speeds up consecutive synthesis triggers to near-instantaneous.
+- **CUDA/GPU acceleration for Piper** — Added a CUDA option to the UI and configuration, enabling GPU-accelerated local inference if available.
+- **Dynamic local Piper voice discovery** — Automatically scans the `piper-voices` folder and lists all downloaded quality variations (low, medium, high) dynamically in the dropdown.
+- **"Unload Model" system tray action** — Added a menu item to the tray context menu to manually terminate the background server and unload the model from RAM.
+- **New Rust IPC commands** — Added `get_local_piper_voices` to discover available models and `unload_piper_model` to allow manual unloading of the cached model.
+- **Server teardown hooks** — Hooked server termination into Tauri's `RunEvent::Exit` so the background python server is always cleaned up when the app is closed.
+
+### Changed
+
+- **CLI synthesis engine** — Intercepts synthesis calls for Piper to route them via the running local HTTP server instead of spawning a new process for every synthesis. Adds fallback to standard CLI execution if server synthesis fails.
+
+### Fixed
+
+- **CLI TTS Engine Health Check** — Fixed the pre-existing health check to dynamically find and use any downloaded local `.onnx` voice in the user's voice folder, resolving failure errors complaining about a missing `"Rosie"` voice.
+
 ## [0.1.5] - 2026-05-20
 
 ### Added
