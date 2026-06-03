@@ -72,7 +72,9 @@ fn handle_connection(mut stream: TcpStream, app: AppHandle) {
     };
 
     let response = match read_result.and_then(|()| parse_request(&buffer)) {
-        Ok(ControlRequest::Health) => http_response(200, "OK", r#"{"ok":true,"app":"CopySpeak TTS"}"#),
+        Ok(ControlRequest::Health) => {
+            http_response(200, "OK", r#"{"ok":true,"app":"CopySpeak TTS"}"#)
+        }
         Ok(ControlRequest::Speak(request)) => {
             match tauri::async_runtime::block_on(speak(app.clone(), request)) {
                 Ok(()) => http_response(200, "OK", r#"{"ok":true}"#),
@@ -181,7 +183,9 @@ async fn speak(app: AppHandle, request: SpeakRequest) -> Result<(), String> {
             request.text
         };
         if text.chars().count() > cfg.trigger.max_text_length as usize {
-            text.chars().take(cfg.trigger.max_text_length as usize).collect()
+            text.chars()
+                .take(cfg.trigger.max_text_length as usize)
+                .collect()
         } else {
             text
         }

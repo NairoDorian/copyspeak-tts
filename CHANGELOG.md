@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **CLI TTS Engine Health Check** — Fixed the pre-existing health check to dynamically find and use any downloaded local `.onnx` voice in the user's voice folder, resolving failure errors complaining about a missing `"Rosie"` voice.
+- **Clippy and Panic Fixes in CLI TTS backend** — Resolved option unwrap panic vector in Piper server port logic and simplified file extension checks using `is_some_and`.
 
 ## [0.1.5] - 2026-05-20
 

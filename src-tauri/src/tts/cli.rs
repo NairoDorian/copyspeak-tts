@@ -32,7 +32,10 @@ pub fn get_piper_server() -> &'static Mutex<Option<PiperServerState>> {
 pub fn unload_piper_model_internal() -> bool {
     let mut server = get_piper_server().lock().unwrap();
     if let Some(mut state) = server.take() {
-        log::info!("[TTS] Unloading Piper model: killing server on port {}", state.port);
+        log::info!(
+            "[TTS] Unloading Piper model: killing server on port {}",
+            state.port
+        );
         let _ = state.child.kill();
         true
     } else {
@@ -176,7 +179,7 @@ fn get_expanded_path() -> String {
         Some(r"C:\Python310\Scripts".to_string()),
     ]
     .into_iter()
-    .filter_map(|p| p)
+    .flatten()
     .collect();
 
     for p in extra_paths {
@@ -192,14 +195,14 @@ fn get_expanded_path() -> String {
 #[cfg(windows)]
 fn get_nvidia_dll_paths(python_executable: &str) -> Option<String> {
     let output = Command::new(python_executable)
-        .args(&[
+        .args([
             "-c",
             "import os, nvidia; print(';'.join([os.path.join(os.path.dirname(nvidia.__file__), p, 'bin') for p in ['cublas', 'cuda_nvrtc', 'cuda_runtime', 'cudnn', 'cufft', 'curand', 'cusolver', 'cusparse', 'nvjitlink'] if os.path.exists(os.path.join(os.path.dirname(nvidia.__file__), p, 'bin'))]))"
         ])
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .ok()?;
-        
+
     if output.status.success() {
         let paths_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if !paths_str.is_empty() {
@@ -268,17 +271,15 @@ impl CliTtsBackend {
             Some(std::path::PathBuf::from("/opt/kokoro-tts")),
         ];
 
-        for path_opt in search_paths.iter() {
-            if let Some(base_path) = path_opt {
-                let model_path = base_path.join(model_name);
-                let voices_path = base_path.join(voices_name);
+        for base_path in search_paths.iter().flatten() {
+            let model_path = base_path.join(model_name);
+            let voices_path = base_path.join(voices_name);
 
-                if model_path.exists() && voices_path.exists() {
-                    return Some((
-                        model_path.to_string_lossy().to_string(),
-                        voices_path.to_string_lossy().to_string(),
-                    ));
-                }
+            if model_path.exists() && voices_path.exists() {
+                return Some((
+                    model_path.to_string_lossy().to_string(),
+                    voices_path.to_string_lossy().to_string(),
+                ));
             }
         }
 
@@ -403,10 +404,7 @@ impl CliTtsBackend {
         let mut need_start = true;
 
         if let Some(ref mut state) = *server {
-            let is_running = match state.child.try_wait() {
-                Ok(None) => true,
-                _ => false,
-            };
+            let is_running = matches!(state.child.try_wait(), Ok(None));
 
             if is_running && state.model_name == voice && state.cuda == cuda {
                 need_start = false;
@@ -424,8 +422,13 @@ impl CliTtsBackend {
         }
 
         let port = if need_start {
-            let new_port = get_free_port().ok_or_else(|| "Failed to find a free port".to_string())?;
-            log::info!("[TTS] Starting Piper HTTP server on port {} for model: {}", new_port, voice);
+            let new_port =
+                get_free_port().ok_or_else(|| "Failed to find a free port".to_string())?;
+            log::info!(
+                "[TTS] Starting Piper HTTP server on port {} for model: {}",
+                new_port,
+                voice
+            );
 
             let mut cmd = Command::new(&self.command);
             let mut args = vec![
@@ -464,7 +467,9 @@ impl CliTtsBackend {
                 }
             }
 
-            let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn Piper server: {}", e))?;
+            let mut child = cmd
+                .spawn()
+                .map_err(|e| format!("Failed to spawn Piper server: {}", e))?;
 
             // Poll /voices to check if server is ready
             let client = reqwest::blocking::Client::builder()
@@ -502,7 +507,10 @@ impl CliTtsBackend {
             });
             new_port
         } else {
-            server.as_ref().unwrap().port
+            server
+                .as_ref()
+                .ok_or_else(|| "Piper server state is unexpectedly missing".to_string())?
+                .port
         };
 
         drop(server);
@@ -784,7 +792,7 @@ impl TtsBackend for CliTtsBackend {
                     if let Ok(entries) = std::fs::read_dir(path) {
                         for entry in entries.filter_map(|e| e.ok()) {
                             let p = entry.path();
-                            if p.is_file() && p.extension().map_or(false, |ext| ext == "onnx") {
+                            if p.is_file() && p.extension().is_some_and(|ext| ext == "onnx") {
                                 if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
                                     found_voice = Some(stem.to_string());
                                     break;
@@ -805,11 +813,11 @@ impl TtsBackend for CliTtsBackend {
             }
 
             // Clean up any existing test files
-            let _ = std::fs::remove_file(&Self::input_path());
+            let _ = std::fs::remove_file(Self::input_path());
             let _ = std::fs::remove_file(&test_output);
 
             // Write a minimal input file
-            let _ = std::fs::write(&Self::input_path(), test_text);
+            let _ = std::fs::write(Self::input_path(), test_text);
 
             #[allow(unused_mut)]
             let mut cmd = Command::new(&self.command);
@@ -878,7 +886,7 @@ impl TtsBackend for CliTtsBackend {
             }
 
             // Clean up test files
-            let _ = std::fs::remove_file(&Self::input_path());
+            let _ = std::fs::remove_file(Self::input_path());
             let _ = std::fs::remove_file(&test_output);
         } else {
             // For non-Python commands, use simple --help check
@@ -980,8 +988,11 @@ mod tests {
     #[test]
     fn test_build_args_legacy_text_placeholder() {
         // Test backward compatibility: {text} should also work as input file path
-        let backend =
-            CliTtsBackend::new("test-tts".into(), vec!["{text}".into(), "{output}".into()], false);
+        let backend = CliTtsBackend::new(
+            "test-tts".into(),
+            vec!["{text}".into(), "{output}".into()],
+            false,
+        );
         let args = backend.build_args("/tmp/input.txt", "/tmp/out.wav", "af_heart", "hello world");
         assert_eq!(args, vec!["/tmp/input.txt", "/tmp/out.wav"]);
     }

@@ -98,10 +98,11 @@ pub fn get_local_piper_voices() -> Result<Vec<PiperVoiceOption>, String> {
     }
 
     let mut voices = Vec::new();
-    let entries = std::fs::read_dir(path).map_err(|e| format!("Failed to read voices dir: {}", e))?;
+    let entries =
+        std::fs::read_dir(path).map_err(|e| format!("Failed to read voices dir: {}", e))?;
     for entry in entries.filter_map(|e| e.ok()) {
         let p = entry.path();
-        if p.is_file() && p.extension().map_or(false, |ext| ext == "onnx") {
+        if p.is_file() && p.extension().is_some_and(|ext| ext == "onnx") {
             if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
                 let label = parse_piper_voice_label(stem);
                 voices.push(PiperVoiceOption {
