@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Frontend Dependency Upgrades** — Upgraded Svelte to `5.56.1`, `@sveltejs/kit` to `2.63.0`, Vite to `8.0.16`, Vitest to `4.1.8`, and all Tauri frontend modules to their latest v2 releases.
+- **Backend Cargo Upgrades** — Upgraded Rust crate dependencies (`dirs` to v6, `flexi_logger` to v0.31, `winreg` to v0.56, `chrono`, and `log` to their latest patch versions).
 - **CLI synthesis engine** — Intercepts synthesis calls for Piper to route them via the running local HTTP server instead of spawning a new process for every synthesis. Adds fallback to standard CLI execution if server synthesis fails.
 
 ### Fixed
