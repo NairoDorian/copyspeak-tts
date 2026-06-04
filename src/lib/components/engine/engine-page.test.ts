@@ -10,8 +10,73 @@ vi.mock("@tauri-apps/api/core", () => ({
 import EnginePage from "./engine-page.svelte";
 
 describe("EnginePage", () => {
+  const mockConfig = {
+    trigger: { listen_enabled: true, double_copy_window_ms: 1000, max_text_length: 1000 },
+    tts: {
+      active_backend: "local",
+      preset: "piper",
+      command: "python3",
+      args_template: ["-m", "piper"],
+      voice: "en_US-joe-medium",
+      openai: { api_key: "", model: "tts-1", voice: "alloy" },
+      elevenlabs: {
+        api_key: "",
+        voice_id: "",
+        model_id: "eleven_turbo_v2_5",
+        output_format: "mp3_44100_128",
+        voice_stability: 0.5,
+        voice_similarity_boost: 0.75
+      },
+      cartesia: {
+        api_key: "",
+        model_id: "sonic-3.5",
+        voice_id: "f786b574-daa5-4673-aa0c-cbe3e8534c02",
+        voice_name: "Katie",
+        output_format: "wav",
+        use_manual_voice_id: false
+      }
+    },
+    playback: { on_retrigger: "interrupt", volume: 100, playback_speed: 1.0 },
+    general: {
+      start_with_windows: false,
+      start_minimized: false,
+      debug_mode: false,
+      close_behavior: "minimize-to-tray",
+      appearance: "system"
+    },
+    output: {
+      enabled: false,
+      directory: "",
+      filename_pattern: "{timestamp}_{text}",
+      format_config: { format: "wav", mp3_bitrate: 128, ogg_bitrate: 64, flac_compression: 5 }
+    },
+    sanitization: {
+      enabled: false,
+      markdown: {
+        enabled: false,
+        strip_headers: false,
+        strip_code_blocks: false,
+        strip_inline_code: false,
+        strip_links: false,
+        strip_bold_italic: false,
+        strip_lists: false,
+        strip_blockquotes: false
+      },
+      tts_normalization: { enabled: false }
+    },
+    pagination: { enabled: false, fragment_size: 500 },
+    history: {
+      enabled: false,
+      storage_mode: "temp",
+      persistent_dir: null,
+      auto_delete: "never",
+      cleanup_orphaned_files: false
+    }
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
+    mockInvoke.mockResolvedValue(JSON.parse(JSON.stringify(mockConfig)));
   });
 
   it("Task-1: should not contain centralized test button", () => {
@@ -22,7 +87,6 @@ describe("EnginePage", () => {
     testButtons.forEach((btn) => {
       if (btn.textContent?.includes("Test Engine") || btn.textContent?.includes("Test TTS")) {
         // Test buttons in backend components are OK, but verify they're NOT centralized
-        // Centralized button would be in the save bar area or separate section
         const parent = btn.parentElement;
         expect(parent?.classList.contains("border-border")).toBe(false);
       }
@@ -30,224 +94,41 @@ describe("EnginePage", () => {
   });
 
   it("Task-1: should render all seven backend tabs after config loads", async () => {
-    mockInvoke.mockResolvedValue({
-      trigger: { listen_enabled: true, double_copy_window_ms: 1000, max_text_length: 1000 },
-      tts: {
-        active_backend: "local",
-        preset: "piper",
-        command: "python3",
-        args_template: ["-m", "piper"],
-        voice: "en_US-joe-medium",
-        openai: { api_key: "", model: "tts-1", voice: "alloy" },
-        elevenlabs: {
-          api_key: "",
-          voice_id: "",
-          model_id: "eleven_turbo_v2_5",
-          output_format: "mp3_44100_128",
-          voice_stability: 0.5,
-          voice_similarity_boost: 0.75
-        },
-        cartesia: {
-          api_key: "",
-          model_id: "sonic-3.5",
-          voice_id: "f786b574-daa5-4673-aa0c-cbe3e8534c02",
-          voice_name: "Katie",
-          output_format: "wav",
-          use_manual_voice_id: false
-        }
-      },
-      playback: { on_retrigger: "interrupt", volume: 100, playback_speed: 1.0 },
-      general: {
-        start_with_windows: false,
-        start_minimized: false,
-        debug_mode: false,
-        close_behavior: "minimize-to-tray",
-        appearance: "system"
-      },
-      output: {
-        enabled: false,
-        directory: "",
-        filename_pattern: "{timestamp}_{text}",
-        format_config: { format: "wav", mp3_bitrate: 128, ogg_bitrate: 64, flac_compression: 5 }
-      },
-      sanitization: {
-        enabled: false,
-        markdown: {
-          enabled: false,
-          strip_headers: false,
-          strip_code_blocks: false,
-          strip_inline_code: false,
-          strip_links: false,
-          strip_bold_italic: false,
-          strip_lists: false,
-          strip_blockquotes: false
-        },
-        tts_normalization: { enabled: false }
-      },
-      pagination: { enabled: false, fragment_size: 500 },
-      history: {
-        enabled: false,
-        storage_mode: "temp",
-        persistent_dir: null,
-        auto_delete: "never",
-        cleanup_orphaned_files: false
-      }
-    });
-
     const { container } = render(EnginePage);
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    const tabs = container.querySelectorAll('[role="tab"]');
+    const tabs = container.querySelectorAll("aside nav button");
     expect(tabs).toHaveLength(7);
 
-    expect(tabs[0].textContent).toBe("Cartesia");
-    expect(tabs[1].textContent).toBe("Kitten TTS");
-    expect(tabs[2].textContent).toBe("Piper TTS");
-    expect(tabs[3].textContent).toBe("Kokoro TTS");
-    expect(tabs[4].textContent).toBe("Pocket TTS");
-    expect(tabs[5].textContent).toBe("ElevenLabs");
-    expect(tabs[6].textContent).toBe("OpenAI");
+    expect(tabs[0].textContent?.trim()).toBe("Cartesia");
+    expect(tabs[1].textContent?.trim()).toBe("Kitten TTS");
+    expect(tabs[2].textContent?.trim()).toBe("Piper TTS");
+    expect(tabs[3].textContent?.trim()).toBe("Kokoro TTS");
+    expect(tabs[4].textContent?.trim()).toBe("Pocket TTS");
+    expect(tabs[5].textContent?.trim()).toBe("ElevenLabs");
+    expect(tabs[6].textContent?.trim()).toBe("OpenAI");
   });
 
   it("Task-1: should load config on mount", async () => {
-    mockInvoke.mockResolvedValue({
-      trigger: { listen_enabled: true, double_copy_window_ms: 1000, max_text_length: 1000 },
-      tts: {
-        active_backend: "local",
-        preset: "piper",
-        command: "python3",
-        args_template: ["-m", "piper"],
-        voice: "en_US-joe-medium",
-        openai: { api_key: "", model: "tts-1", voice: "alloy" },
-        elevenlabs: {
-          api_key: "",
-          voice_id: "",
-          model_id: "eleven_turbo_v2_5",
-          output_format: "mp3_44100_128",
-          voice_stability: 0.5,
-          voice_similarity_boost: 0.75
-        },
-        cartesia: {
-          api_key: "",
-          model_id: "sonic-3.5",
-          voice_id: "f786b574-daa5-4673-aa0c-cbe3e8534c02",
-          voice_name: "Katie",
-          output_format: "wav",
-          use_manual_voice_id: false
-        }
-      },
-      playback: { on_retrigger: "interrupt", volume: 100, playback_speed: 1.0 },
-      general: {
-        start_with_windows: false,
-        start_minimized: false,
-        debug_mode: false,
-        close_behavior: "minimize-to-tray",
-        appearance: "system"
-      },
-      output: {
-        enabled: false,
-        directory: "",
-        filename_pattern: "{timestamp}_{text}",
-        format_config: { format: "wav", mp3_bitrate: 128, ogg_bitrate: 64, flac_compression: 5 }
-      },
-      sanitization: {
-        enabled: false,
-        markdown: {
-          enabled: false,
-          strip_headers: false,
-          strip_code_blocks: false,
-          strip_inline_code: false,
-          strip_links: false,
-          strip_bold_italic: false,
-          strip_lists: false,
-          strip_blockquotes: false
-        },
-        tts_normalization: { enabled: false }
-      },
-      pagination: { enabled: false, fragment_size: 500 },
-      history: {
-        enabled: false,
-        storage_mode: "temp",
-        persistent_dir: null,
-        auto_delete: "never",
-        cleanup_orphaned_files: false
-      }
-    });
-
     render(EnginePage);
-
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(mockInvoke).toHaveBeenCalledWith("get_config");
   });
 
   it("Task-1: should save config with set_config IPC", async () => {
-    mockInvoke
-      .mockResolvedValueOnce({
-        trigger: { listen_enabled: true, double_copy_window_ms: 1000, max_text_length: 1000 },
-        tts: {
-          active_backend: "local",
-          preset: "piper",
-          command: "python3",
-          args_template: ["-m", "piper"],
-          voice: "en_US-joe-medium",
-          openai: { api_key: "", model: "tts-1", voice: "alloy" },
-          elevenlabs: {
-            api_key: "",
-            voice_id: "",
-            model_id: "eleven_turbo_v2_5",
-            output_format: "mp3_44100_128",
-            voice_stability: 0.5,
-            voice_similarity_boost: 0.75
-          },
-          cartesia: {
-            api_key: "",
-            model_id: "sonic-3.5",
-            voice_id: "f786b574-daa5-4673-aa0c-cbe3e8534c02",
-            output_format: "wav"
-          }
-        },
-        playback: { on_retrigger: "interrupt", volume: 100, playback_speed: 1.0 },
-        general: {
-          start_with_windows: false,
-          start_minimized: false,
-          debug_mode: false,
-          close_behavior: "minimize-to-tray",
-          appearance: "system"
-        },
-        output: {
-          enabled: false,
-          directory: "",
-          filename_pattern: "{timestamp}_{text}",
-          format_config: { format: "wav", mp3_bitrate: 128, ogg_bitrate: 64, flac_compression: 5 }
-        },
-        sanitization: {
-          enabled: false,
-          markdown: {
-            enabled: false,
-            strip_headers: false,
-            strip_code_blocks: false,
-            strip_inline_code: false,
-            strip_links: false,
-            strip_bold_italic: false,
-            strip_lists: false,
-            strip_blockquotes: false
-          },
-          tts_normalization: { enabled: false }
-        },
-        pagination: { enabled: false, fragment_size: 500 },
-        history: {
-          enabled: false,
-          storage_mode: "temp",
-          persistent_dir: null,
-          auto_delete: "never",
-          cleanup_orphaned_files: false
-        }
-      })
-      .mockResolvedValue(undefined);
-
     const { container } = render(EnginePage);
 
     // Wait for config to load
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Change a setting to make it dirty and show save bar
+    const tabOpenAi = Array.from(container.querySelectorAll("aside nav button")).find((btn) =>
+      btn.textContent?.includes("OpenAI")
+    );
+    if (tabOpenAi) {
+      (tabOpenAi as HTMLButtonElement).click();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
 
     // Trigger save by clicking Save button
     const saveButton = Array.from(container.querySelectorAll("button")).find((btn) =>
@@ -256,7 +137,7 @@ describe("EnginePage", () => {
 
     if (saveButton) {
       saveButton.click();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 50));
       expect(mockInvoke).toHaveBeenCalledWith("set_config", { newConfig: expect.any(Object) });
     }
   });

@@ -18,3 +18,18 @@ vi.stubGlobal("__setMockPathname", (pathname: string) => {
 vi.mock("$app/state", () => ({
   page: pageMock
 }));
+
+// Initialize locale for svelte-i18n
+import { init, addMessages } from "svelte-i18n";
+import enTranslations from "./lib/locales/en.json";
+
+addMessages("en", enTranslations);
+init({
+  fallbackLocale: "en",
+  initialLocale: "en"
+});
+
+// Mock Tooltip component to avoid context providers in unit tests
+vi.mock("$lib/components/ui/info-tooltip.svelte", () => {
+  return import("./lib/components/ui/mock-info-tooltip.svelte");
+});

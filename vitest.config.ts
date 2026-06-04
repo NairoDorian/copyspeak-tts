@@ -2,11 +2,9 @@ import { defineConfig } from "vitest/config";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { svelteTesting } from "@testing-library/svelte/vite";
 import path from "node:path";
-import { mockAppStatePlugin } from "./vitest-plugin-mock-state";
 
 export default defineConfig({
   plugins: [
-    mockAppStatePlugin(),
     svelte({ hot: !process.env.VITEST, compilerOptions: { css: "injected" } }),
     svelteTesting()
   ],
@@ -27,7 +25,9 @@ export default defineConfig({
   resolve: {
     alias: {
       $lib: path.resolve("./src/lib"),
-      "$lib/*": path.resolve("./src/lib/*")
+      "$lib/*": path.resolve("./src/lib/*"),
+      "$app/navigation": path.resolve("./src/lib/mocks/app-navigation.ts"),
+      "$app/state": path.resolve("./src/lib/mocks/app-state.ts")
     }
   }
 });
