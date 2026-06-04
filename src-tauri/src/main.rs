@@ -273,6 +273,7 @@ fn main() {
         .setup(|app| {
             // --- Load config ---
             let cfg = config::load_or_default();
+            let initial_listen = cfg.trigger.listen_enabled;
             app.manage(std::sync::Mutex::new(cfg));
 
             // --- Init audio player with saved config ---
@@ -305,7 +306,7 @@ fn main() {
             app.manage(std::sync::Mutex::new(telemetry));
 
             // --- Init listening state (shared with clipboard thread) ---
-            let is_listening = Arc::new(AtomicBool::new(true));
+            let is_listening = Arc::new(AtomicBool::new(initial_listen));
             app.manage(is_listening.clone());
 
             // --- Init Job status ---
@@ -326,7 +327,12 @@ fn main() {
                 None::<&str>,
             )?;
             let sep1 = PredefinedMenuItem::separator(app)?;
-            let toggle_item = MenuItem::with_id(app, "toggle", "● Listening", true, None::<&str>)?;
+            let toggle_label = if initial_listen {
+                "● Listening"
+            } else {
+                "○ Paused"
+            };
+            let toggle_item = MenuItem::with_id(app, "toggle", toggle_label, true, None::<&str>)?;
             let speak_item =
                 MenuItem::with_id(app, "speak", "Speak Clipboard Now", true, None::<&str>)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
@@ -352,8 +358,21 @@ fn main() {
                 ],
             )?;
 
+            // --- Listen to config-changed to update the tray menu item label dynamically ---
+            let toggle_item_for_listener = toggle_item.clone();
+            let app_handle_for_listener = app.handle().clone();
+            app.listen("config-changed", move |_event| {
+                let is_listening_state = app_handle_for_listener.state::<Arc<AtomicBool>>();
+                let state = is_listening_state.load(Ordering::Relaxed);
+                let label = if state {
+                    "● Listening"
+                } else {
+                    "○ Paused"
+                };
+                let _ = toggle_item_for_listener.set_text(label);
+            });
+
             let is_listening_for_tray = is_listening.clone();
-            let toggle_item_for_event = toggle_item.clone();
             let _tray = TrayIconBuilder::with_id("main")
                 .menu(&menu)
                 .tooltip("CopySpeak TTS")
@@ -366,13 +385,17 @@ fn main() {
                             is_listening_for_tray.store(new_state, Ordering::Relaxed);
                             log::info!("Tray: toggle listening -> {}", new_state);
 
-                            // Update menu item label
-                            let label = if new_state {
-                                "● Listening"
-                            } else {
-                                "○ Paused"
-                            };
-                            let _ = toggle_item_for_event.set_text(label);
+                            // Update in-memory config and persist to disk
+                            let config_state = app.state::<std::sync::Mutex<config::AppConfig>>();
+                            if let Ok(mut cfg) = config_state.lock() {
+                                cfg.trigger.listen_enabled = new_state;
+                                if let Err(e) = config::save(&cfg) {
+                                    log::error!("Failed to save config on tray toggle: {}", e);
+                                }
+                            }
+
+                            // Emit config-changed event to sync the frontend and tray icon
+                            let _ = app.emit("config-changed", ());
                         }
                         "speak" => {
                             log::info!("Tray: speak clipboard");
@@ -584,38 +607,6 @@ fn main() {
                 let _ = window.set_focus();
             }
         }))
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(move |app, _shortcut, event| {
-                    if event.state() == ShortcutState::Pressed {
-                        log::info!("Global hotkey triggered: speak from clipboard");
-                        let app_handle = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let config: State<std::sync::Mutex<config::AppConfig>> =
-                                app_handle.state();
-                            let player: State<std::sync::Mutex<audio::AudioPlayer>> =
-                                app_handle.state();
-                            let history: State<std::sync::Mutex<history::HistoryLog>> =
-                                app_handle.state();
-                            let telemetry_state: State<std::sync::Mutex<telemetry::TelemetryLog>> =
-                                app_handle.state();
-                            if let Err(e) = commands::speak_now(
-                                app_handle.clone(),
-                                config,
-                                player,
-                                history,
-                                telemetry_state,
-                                None,
-                            )
-                            .await
-                            {
-                                log::error!("Failed to speak from hotkey: {}", e);
-                            }
-                        });
-                    }
-                })
-                .build(),
-        )
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::set_config,

@@ -213,6 +213,7 @@ mod tests {
     #[test]
     fn test_validation_command_empty() {
         let mut config = AppConfig::default();
+        config.tts.active_backend = TtsEngine::Local;
         config.tts.command = "".into();
         let result = config.validate();
         assert!(result.is_err());
@@ -225,6 +226,7 @@ mod tests {
     #[test]
     fn test_validation_args_template_missing_placeholders() {
         let mut config = AppConfig::default();
+        config.tts.active_backend = TtsEngine::Local;
         config.tts.args_template = vec!["-v".into(), "{voice}".into()];
         let result = config.validate();
         assert!(result.is_err());

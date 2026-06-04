@@ -230,6 +230,8 @@ pub fn config_exists() -> bool {
 
 #[tauri::command]
 pub fn set_listening(
+    app: AppHandle,
+    config: State<'_, Mutex<AppConfig>>,
     is_listening: State<'_, Arc<AtomicBool>>,
     enabled: bool,
 ) -> Result<(), String> {
@@ -238,6 +240,17 @@ pub fn set_listening(
     }
     is_listening.store(enabled, Ordering::Relaxed);
     log::info!("set_listening: {}", enabled);
+
+    // Update in-memory config and persist to disk
+    {
+        let mut cfg = config.lock().map_err(|e| e.to_string())?;
+        cfg.trigger.listen_enabled = enabled;
+        config::save(&cfg)?;
+    }
+
+    // Emit config-changed event to sync the frontend and tray icon
+    let _ = app.emit("config-changed", ());
+
     Ok(())
 }
 

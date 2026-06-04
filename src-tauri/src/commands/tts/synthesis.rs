@@ -293,6 +293,7 @@ pub async fn speak_now(
             &active_backend,
             &telemetry_state,
             &synthesis_start,
+            &pagination_config,
             estimated_ms,
             confidence,
         )
@@ -358,11 +359,11 @@ async fn synthesize_paginated(
     active_backend: &crate::config::TtsEngine,
     telemetry_state: &State<'_, Mutex<telemetry::TelemetryLog>>,
     synthesis_start: &Instant,
+    pagination_config: &crate::config::PaginationConfig,
     _total_estimate: Option<u64>,
     _avg_confidence: f32,
 ) -> Result<Vec<u8>, String> {
-    let pagination_config = crate::config::PaginationConfig::default();
-    let fragments = pagination::paginate_text(text, &pagination_config);
+    let fragments = pagination::paginate_text(text, pagination_config);
 
     if fragments.len() <= 1 {
         // Only one fragment — fall back to normal synthesis
