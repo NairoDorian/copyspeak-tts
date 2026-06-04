@@ -1,10 +1,15 @@
-# AZ_AgentZero: Export source-only zip (no build artifacts)
+# Export source-only zip (no build artifacts)
 param(
-    [string]$OutputPath = "..\AZ_AgentZero-source.zip"
+    [string]$OutputPath = $null
 )
 
 $ErrorActionPreference = "Stop"
 $ROOT = $PSScriptRoot
+$ProjectName = Split-Path -Leaf $ROOT
+
+if (-not $OutputPath) {
+    $OutputPath = Join-Path (Split-Path -Parent $ROOT) "$ProjectName-source.zip"
+}
 
 # Try to locate 7z in common installation paths
 $7zPaths = @(
@@ -26,7 +31,7 @@ if (-not $7z) {
     exit 1
 }
 
-Write-Host "Creating source-only archive of AZ_AgentZero..." -ForegroundColor Yellow
+Write-Host "Creating source-only archive of $ProjectName..." -ForegroundColor Yellow
 
 # Include docs now tracked in git; exclude large/cache/build/temp artifacts
 & $7z a -tzip $OutputPath "$ROOT\*" `
