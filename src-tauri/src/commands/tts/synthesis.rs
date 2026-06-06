@@ -113,17 +113,22 @@ fn add_history_with_metadata(
     );
 }
 
-/// Emit audio-ready event with base64 encoded audio
-fn emit_audio_ready(app: &AppHandle, wav_bytes: &[u8]) {
+/// Emit audio-ready event with base64 encoded audio.
+/// Encoding runs on blocking thread pool to avoid stalling the async worker.
+async fn emit_audio_ready(app: &AppHandle, wav_bytes: &[u8]) {
     use base64::{engine::general_purpose, Engine as _};
-    let encoded = general_purpose::STANDARD.encode(wav_bytes);
+    let wav = wav_bytes.to_vec();
+    let encoded = tokio::task::spawn_blocking(move || general_purpose::STANDARD.encode(&wav))
+        .await
+        .unwrap_or_default();
     if let Err(e) = app.emit("audio-ready", encoded) {
         log::warn!("Failed to emit audio-ready: {}", e);
     }
 }
 
-/// Emit audio-fragment-ready event for streaming playback
-fn emit_audio_fragment(
+/// Emit audio-fragment-ready event for streaming playback.
+/// Encoding runs on blocking thread pool to avoid stalling the async worker.
+async fn emit_audio_fragment(
     app: &AppHandle,
     wav_bytes: &[u8],
     index: usize,
@@ -131,7 +136,10 @@ fn emit_audio_fragment(
     text: String,
 ) {
     use base64::{engine::general_purpose, Engine as _};
-    let encoded = general_purpose::STANDARD.encode(wav_bytes);
+    let wav = wav_bytes.to_vec();
+    let encoded = tokio::task::spawn_blocking(move || general_purpose::STANDARD.encode(&wav))
+        .await
+        .unwrap_or_default();
     let is_final = index == total - 1;
     if let Err(e) = app.emit(
         "audio-fragment-ready",
@@ -348,6 +356,7 @@ pub async fn speak_now(
         backend_arc,
         synthesis_ms,
     )
+    .await
 }
 
 /// Synthesize paginated text with progress updates
@@ -495,7 +504,7 @@ fn handle_file_output(
 }
 
 /// Handle normal playback output
-fn handle_playback_output(
+async fn handle_playback_output(
     app: &AppHandle,
     config: &State<'_, Mutex<AppConfig>>,
     history: &State<'_, Mutex<HistoryLog>>,
@@ -536,7 +545,7 @@ fn handle_playback_output(
     hud::show_hud(app, envelope, Some(text.to_string()));
 
     // Emit audio to frontend for browser-native playback
-    emit_audio_ready(app, wav_bytes);
+    emit_audio_ready(app, wav_bytes).await;
 
     Ok(())
 }
@@ -560,7 +569,7 @@ pub async fn speak_queued(
         return Err("Nothing to speak".into());
     }
 
-    let (active_backend, tts_config, pagination_config, post_process_config) = {
+    let (active_backend, tts_config, mut pagination_config, post_process_config) = {
         let cfg = config.lock().unwrap();
         (
             cfg.tts.active_backend.clone(),
@@ -569,6 +578,38 @@ pub async fn speak_queued(
             cfg.post_process.clone(),
         )
     };
+
+    // Adaptive fragment sizing: use telemetry to determine optimal fragment size.
+    // Fast engines get larger fragments to reduce API call count.
+    {
+        let telemetry = telemetry_state.lock().unwrap();
+        let engine_key = engine_str(&active_backend);
+        let voice = voice_for_backend(&active_backend, &tts_config);
+        // Use mid-size bucket estimate for sizing decision
+        let bucket = telemetry::get_bucket_index(500);
+        let timing_key = telemetry::TimingKey {
+            backend: engine_key.to_string(),
+            voice,
+            bucket,
+        };
+        if let Some(stats) = telemetry.stats.get(&timing_key) {
+            if stats.sample_count >= 3 {
+                let adjusted = pagination::adaptive_fragment_size(
+                    &pagination_config,
+                    stats.chars_per_ms,
+                );
+                if adjusted != pagination_config.fragment_size as usize {
+                    log::info!(
+                        "[Queue] Adaptive fragment size: {} → {} (chars/ms: {:.1})",
+                        pagination_config.fragment_size,
+                        adjusted,
+                        stats.chars_per_ms
+                    );
+                    pagination_config.fragment_size = adjusted as u32;
+                }
+            }
+        }
+    }
 
     // Optional LLM post-processing — best-effort; falls back on failure.
     let text = crate::post_process::try_process(text, &post_process_config).await;
@@ -649,145 +690,58 @@ pub async fn speak_queued(
     let engine_str_val = engine_str(&active_backend);
     let engine_id_val = engine_identifier(&active_backend, &tts_config);
 
-    // Synthesize and play each fragment
-    for (index, fragment) in fragments.iter().enumerate() {
-        // Check if we should stop
-        {
-            let q = queue.lock().unwrap();
-            if q.should_stop() {
-                log::info!("[Queue] Playback stopped by user");
-                q.clear();
-                let _ = app.emit(
-                    "pagination:stopped",
-                    PaginationEvent {
-                        total,
-                        current_index: index,
-                        is_paginated: total > 1,
-                    },
-                );
-                return Ok(());
-            }
-        }
+    // Create backend once for all fragments (reuses HTTP connection pool / Piper server)
+    let backend: Box<dyn TtsBackend> = create_backend(&active_backend, &tts_config);
+    let backend_arc = Arc::new(backend);
 
-        log::debug!("[Queue] Synthesizing fragment {} of {}", index + 1, total);
+    let is_cloud = matches!(
+        active_backend,
+        crate::config::TtsEngine::OpenAI
+            | crate::config::TtsEngine::ElevenLabs
+            | crate::config::TtsEngine::Cartesia
+    );
 
-        // Emit fragment started event
-        let _ = app.emit(
-            "pagination:fragment-started",
-            PaginationEvent {
-                total,
-                current_index: index,
-                is_paginated: total > 1,
-            },
-        );
-
-        // Emit progress update
-        let elapsed = synthesis_start.elapsed().as_millis() as u64;
-        let processed_chars: usize = fragments.iter().take(index).map(|f| f.text.len()).sum();
-        hud::emit_synthesis_progress(
+    // Parallel synthesis for cloud backends with multiple fragments
+    if is_cloud && fragments.len() > 1 {
+        synthesize_queued_parallel(
             &app,
-            total_estimate,
-            elapsed,
-            index,
+            backend_arc,
+            &fragments,
+            &voice,
             total,
-            true,
-            avg_confidence,
-            truncate_preview(&fragment.text, 50),
-            total_chars,
-            processed_chars,
-        );
-
-        // Set current index in queue
-        {
-            let q = queue.lock().unwrap();
-            q.set_current_index(index);
-        }
-
-        // Create backend for this fragment
-        let backend: Box<dyn TtsBackend> = create_backend(&active_backend, &tts_config);
-        let backend_arc = Arc::new(backend);
-
-        // Synthesize fragment
-        let fragment_start = Instant::now();
-        let wav_bytes =
-            synthesize_async(backend_arc.clone(), fragment.text.clone(), voice.clone()).await?;
-        let fragment_duration = fragment_start.elapsed();
-
-        // Record telemetry
-        record_telemetry(
+            &config,
+            &history,
             &telemetry_state,
             &engine_str_val,
+            &engine_id_val,
+            &tts_config,
+            &active_backend,
+            &batch_id,
+        )
+        .await;
+    } else {
+        // Sequential synthesis for CLI backends or single fragments
+        synthesize_queued_sequential(
+            &app,
+            backend_arc,
+            &fragments,
             &voice,
-            fragment.text.len(),
-            fragment_duration.as_millis() as u64,
-        );
-
-        // Store audio in queue
-        {
-            let q = queue.lock().unwrap();
-            q.set_audio(index, wav_bytes.clone());
-        }
-
-        log::debug!(
-            "[Queue] Synthesized fragment {} ({} bytes)",
-            index + 1,
-            wav_bytes.len()
-        );
-
-        // Extract envelope
-        let envelope = extract_envelope_or_default(&wav_bytes);
-
-        // Transition HUD from synthesizing → playing on first fragment
-        if index == 0 {
-            hud::show_hud(&app, envelope.clone(), Some(text.clone()));
-        }
-
-        // Save to history
-        let audio_ext = backend_arc.file_extension().to_string();
-        let voice_name = voice_display_name(&active_backend, &tts_config, &voice);
-        let history_path =
-            save_to_history_storage(&config, &wav_bytes, &engine_id_val, &voice_name, &audio_ext);
-
-        // Build metadata
-        let mut metadata = HashMap::new();
-        if total > 1 {
-            metadata.insert("fragment_index".to_string(), serde_json::json!(index));
-            metadata.insert("fragment_total".to_string(), serde_json::json!(total));
-        }
-
-        add_history_with_metadata(
+            total,
+            &queue,
+            &config,
             &history,
-            &fragment.text,
+            &telemetry_state,
             &engine_str_val,
-            &voice,
-            envelope.duration_ms,
-            history_path,
-            batch_id.clone(),
-            fragment_duration.as_millis() as u64,
-            Some(metadata),
-        );
-        let _ = app.emit("history-updated", ());
-
-        // Emit audio fragment for streaming playback
-        emit_audio_fragment(&app, &wav_bytes, index, total, fragment.text.clone());
-
-        // Emit fragment events
-        let _ = app.emit(
-            "pagination:fragment-ready",
-            PaginationEvent {
-                total,
-                current_index: index,
-                is_paginated: total > 1,
-            },
-        );
-        let _ = app.emit(
-            "pagination:fragment-complete",
-            PaginationEvent {
-                total,
-                current_index: index,
-                is_paginated: total > 1,
-            },
-        );
+            &engine_id_val,
+            &tts_config,
+            &active_backend,
+            &batch_id,
+            synthesis_start,
+            total_estimate,
+            avg_confidence,
+            total_chars,
+        )
+        .await?;
     }
 
     // Clear queue (frontend handles streaming)
@@ -809,6 +763,266 @@ pub async fn speak_queued(
     );
 
     Ok(())
+}
+
+// ── Queued Synthesis Helpers ─────────────────────────────────────────────────
+
+/// Sequential synthesis for CLI backends or single fragments.
+async fn synthesize_queued_sequential(
+    app: &AppHandle,
+    backend_arc: Arc<Box<dyn TtsBackend>>,
+    fragments: &[pagination::TextFragment],
+    voice: &str,
+    total: usize,
+    queue: &State<'_, Mutex<FragmentQueue>>,
+    config: &State<'_, Mutex<AppConfig>>,
+    history: &State<'_, Mutex<HistoryLog>>,
+    telemetry_state: &State<'_, Mutex<telemetry::TelemetryLog>>,
+    engine_str_val: &str,
+    engine_id_val: &str,
+    tts_config: &crate::config::TtsConfig,
+    active_backend: &crate::config::TtsEngine,
+    batch_id: &Option<String>,
+    synthesis_start: Instant,
+    total_estimate: Option<u64>,
+    avg_confidence: f32,
+    total_chars: usize,
+) -> Result<(), String> {
+    for (index, fragment) in fragments.iter().enumerate() {
+        {
+            let q = queue.lock().unwrap();
+            if q.should_stop() {
+                log::info!("[Queue] Playback stopped by user");
+                q.clear();
+                let _ = app.emit(
+                    "pagination:stopped",
+                    PaginationEvent {
+                        total,
+                        current_index: index,
+                        is_paginated: total > 1,
+                    },
+                );
+                return Ok(());
+            }
+        }
+
+        log::debug!("[Queue] Synthesizing fragment {} of {}", index + 1, total);
+
+        let _ = app.emit(
+            "pagination:fragment-started",
+            PaginationEvent {
+                total,
+                current_index: index,
+                is_paginated: total > 1,
+            },
+        );
+
+        let elapsed = synthesis_start.elapsed().as_millis() as u64;
+        let processed_chars: usize = fragments.iter().take(index).map(|f| f.text.len()).sum();
+        hud::emit_synthesis_progress(
+            app,
+            total_estimate,
+            elapsed,
+            index,
+            total,
+            true,
+            avg_confidence,
+            truncate_preview(&fragment.text, 50),
+            total_chars,
+            processed_chars,
+        );
+
+        {
+            let q = queue.lock().unwrap();
+            q.set_current_index(index);
+        }
+
+        let fragment_start = Instant::now();
+        let wav_bytes =
+            synthesize_async(backend_arc.clone(), fragment.text.clone(), voice.to_string()).await?;
+        let fragment_duration = fragment_start.elapsed();
+
+        record_telemetry(
+            telemetry_state,
+            engine_str_val,
+            voice,
+            fragment.text.len(),
+            fragment_duration.as_millis() as u64,
+        );
+
+        {
+            let q = queue.lock().unwrap();
+            q.set_audio(index, wav_bytes.clone());
+        }
+
+        let envelope = extract_envelope_or_default(&wav_bytes);
+
+        if index == 0 {
+            hud::show_hud(app, envelope.clone(), None);
+        }
+
+        let audio_ext = backend_arc.file_extension().to_string();
+        let voice_name = voice_display_name(active_backend, tts_config, voice);
+        let history_path =
+            save_to_history_storage(config, &wav_bytes, engine_id_val, &voice_name, &audio_ext);
+
+        let mut metadata = HashMap::new();
+        if total > 1 {
+            metadata.insert("fragment_index".to_string(), serde_json::json!(index));
+            metadata.insert("fragment_total".to_string(), serde_json::json!(total));
+        }
+
+        add_history_with_metadata(
+            history,
+            &fragment.text,
+            engine_str_val,
+            voice,
+            envelope.duration_ms,
+            history_path,
+            batch_id.clone(),
+            fragment_duration.as_millis() as u64,
+            Some(metadata),
+        );
+
+        emit_audio_fragment(app, &wav_bytes, index, total, fragment.text.clone()).await;
+
+        let _ = app.emit(
+            "pagination:fragment-ready",
+            PaginationEvent {
+                total,
+                current_index: index,
+                is_paginated: total > 1,
+            },
+        );
+        let _ = app.emit(
+            "pagination:fragment-complete",
+            PaginationEvent {
+                total,
+                current_index: index,
+                is_paginated: total > 1,
+            },
+        );
+    }
+
+    let _ = app.emit("history-updated", ());
+    Ok(())
+}
+
+/// Parallel synthesis for cloud backends with multiple fragments.
+/// Spawns all fragments concurrently via tokio tasks, collects results sorted
+/// by index, then emits in order for correct sequential playback.
+async fn synthesize_queued_parallel(
+    app: &AppHandle,
+    backend_arc: Arc<Box<dyn TtsBackend>>,
+    fragments: &[pagination::TextFragment],
+    voice: &str,
+    total: usize,
+    config: &State<'_, Mutex<AppConfig>>,
+    history: &State<'_, Mutex<HistoryLog>>,
+    _telemetry_state: &State<'_, Mutex<telemetry::TelemetryLog>>,
+    engine_str_val: &str,
+    engine_id_val: &str,
+    tts_config: &crate::config::TtsConfig,
+    active_backend: &crate::config::TtsEngine,
+    batch_id: &Option<String>,
+) {
+    use tokio::task::JoinSet;
+
+    let mut join_set = JoinSet::new();
+    let total_frags = fragments.len().min(3); // Cap concurrency at 3
+
+    for (index, fragment) in fragments.iter().take(total_frags).enumerate() {
+        let backend = backend_arc.clone();
+        let text = fragment.text.clone();
+        let voice = voice.to_string();
+        let fragment = fragment.clone();
+
+        join_set.spawn(async move {
+            let wav_bytes =
+                synthesize_async(backend, text.clone(), voice.clone()).await?;
+            Ok::<_, String>((index as u32, fragment, wav_bytes))
+        });
+    }
+
+    let mut per_fragment_wavs: Vec<Option<Vec<u8>>> = vec![None; total_frags];
+
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok(Ok((idx, _fragment, wav_bytes))) => {
+                let i = idx as usize;
+                if i < per_fragment_wavs.len() {
+                    per_fragment_wavs[i] = Some(wav_bytes);
+                }
+            }
+            Ok(Err(e)) => {
+                log::error!("[Queue] Parallel fragment synthesis failed: {}", e);
+            }
+            Err(e) => {
+                log::error!("[Queue] JoinSet task panicked: {}", e);
+            }
+        }
+    }
+
+    // Emit fragments in index order for correct sequential playback
+    for (idx, wav_opt) in per_fragment_wavs.iter().enumerate() {
+        if let Some(wav_bytes) = wav_opt {
+            let fragment = &fragments[idx];
+            let envelope = extract_envelope_or_default(wav_bytes);
+
+            if idx == 0 {
+                hud::show_hud(app, envelope.clone(), None);
+            }
+
+            let audio_ext = backend_arc.file_extension().to_string();
+            let voice_name = voice_display_name(active_backend, tts_config, voice);
+            let history_path = save_to_history_storage(
+                config,
+                wav_bytes,
+                engine_id_val,
+                &voice_name,
+                &audio_ext,
+            );
+
+            let mut metadata = HashMap::new();
+            if total > 1 {
+                metadata.insert("fragment_index".to_string(), serde_json::json!(idx));
+                metadata.insert("fragment_total".to_string(), serde_json::json!(total));
+            }
+
+            add_history_with_metadata(
+                history,
+                &fragment.text,
+                engine_str_val,
+                voice,
+                envelope.duration_ms,
+                history_path,
+                batch_id.clone(),
+                0,
+                Some(metadata),
+            );
+
+            emit_audio_fragment(app, wav_bytes, idx, total, fragment.text.clone()).await;
+
+            let _ = app.emit(
+                "pagination:fragment-ready",
+                PaginationEvent {
+                    total,
+                    current_index: idx,
+                    is_paginated: total > 1,
+                },
+            );
+            let _ = app.emit(
+                "pagination:fragment-complete",
+                PaginationEvent {
+                    total,
+                    current_index: idx,
+                    is_paginated: total > 1,
+                },
+            );
+        }
+    }
+
+    let _ = app.emit("history-updated", ());
 }
 
 // ── speak_history_entry ─────────────────────────────────────────────────────
@@ -913,7 +1127,7 @@ pub async fn speak_history_entry(
     hud::show_hud(&app, envelope, Some(text.clone()));
 
     // Emit audio to frontend
-    emit_audio_ready(&app, &wav_bytes);
+    emit_audio_ready(&app, &wav_bytes).await;
 
     log::info!("Re-spoke history entry: {}", entry_id);
     Ok(())

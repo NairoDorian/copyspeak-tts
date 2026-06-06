@@ -313,6 +313,26 @@ pub fn should_paginate(text: &str, config: &PaginationConfig) -> bool {
     text.chars().count() > config.fragment_size as usize
 }
 
+/// Adjust fragment size based on telemetry data.
+/// Fast engines get larger fragments (fewer API calls), slow engines get default.
+/// Returns the adjusted fragment size in characters.
+pub fn adaptive_fragment_size(
+    config: &PaginationConfig,
+    chars_per_ms: f64,
+) -> usize {
+    let base = config.fragment_size as usize;
+    // Fast synthesis (> 20 chars/ms): 3x fragment size, capped at 2000
+    if chars_per_ms > 20.0 {
+        (base * 3).min(2000)
+    // Moderate (5-20 chars/ms): 2x
+    } else if chars_per_ms > 5.0 {
+        (base * 2).min(1500)
+    // Slow or unknown: keep default
+    } else {
+        base
+    }
+}
+
 /// Get the number of fragments that would be created for the given text.
 #[allow(dead_code)]
 pub fn estimate_fragment_count(text: &str, config: &PaginationConfig) -> usize {

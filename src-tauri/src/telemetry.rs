@@ -12,7 +12,7 @@ use std::sync::Mutex;
 const CHAR_BUCKETS: &[u32] = &[0, 500, 2000, 5000, 10000, std::u32::MAX];
 
 /// Get the bucket index for a given character count.
-fn get_bucket_index(char_count: usize) -> usize {
+pub fn get_bucket_index(char_count: usize) -> usize {
     let count = char_count as u32;
     for (i, &threshold) in CHAR_BUCKETS.iter().enumerate() {
         if count < threshold {

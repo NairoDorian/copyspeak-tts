@@ -17,6 +17,7 @@ export class AudioAnalyser {
   private _amplitudeLoopId: number | null = null;
   private _lastEmitTime = 0;
   private _emitTo: AnalyserConfig["emitTo"] = null;
+  private _dataArray: Uint8Array<ArrayBuffer> | null = null;
 
   /**
    * Wire up the AnalyserNode to the audio element
@@ -41,16 +42,19 @@ export class AudioAnalyser {
   start(): void {
     if (this._amplitudeLoopId !== null) return; // already running
 
+    if (!this._dataArray && this._analyser) {
+      this._dataArray = new Uint8Array(this._analyser.frequencyBinCount) as Uint8Array<ArrayBuffer>;
+    }
+
     const loop = (timestamp: number) => {
-      if (!this._analyser) {
+      if (!this._analyser || !this._dataArray) {
         this._amplitudeLoopId = null;
         return;
       }
       if (timestamp - this._lastEmitTime >= 16) {
         // ~60fps for faster response
-        const dataArray = new Uint8Array(this._analyser.frequencyBinCount);
-        this._analyser.getByteFrequencyData(dataArray);
-        const bars = buildBarValues(dataArray, 16);
+        this._analyser.getByteFrequencyData(this._dataArray);
+        const bars = buildBarValues(this._dataArray as unknown as Uint8Array, 16);
         void this._emitTo?.("hud", "hud:amplitude", { bars });
         this._lastEmitTime = timestamp;
       }

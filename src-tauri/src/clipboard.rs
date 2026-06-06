@@ -237,9 +237,8 @@ unsafe extern "system" fn clipboard_wndproc(
                     if let Some(text) = read_clipboard_text() {
                         let text_len = text.len();
                         let text_preview: String = text.chars().take(50).collect();
-                        let timestamp = chrono::Local::now().format("%H:%M:%S%.3f");
-
                         if crate::logging::is_debug_mode() {
+                            let timestamp = chrono::Local::now().format("%H:%M:%S%.3f");
                             log::debug!("[Clipboard] Change detected at {}", timestamp);
                             log::debug!("[Clipboard] Text length: {} chars", text_len);
                             log::debug!(
@@ -264,7 +263,7 @@ unsafe extern "system" fn clipboard_wndproc(
                             return;
                         }
 
-                        let (trigger_window_ms, max_text_length) = {
+                        let (trigger_window_ms, max_text_length, sanitization_config) = {
                             let config_state = ctx
                                 .app
                                 .state::<std::sync::Mutex<crate::config::AppConfig>>();
@@ -272,23 +271,17 @@ unsafe extern "system" fn clipboard_wndproc(
                             (
                                 config.trigger.double_copy_window_ms,
                                 config.trigger.max_text_length,
+                                config.sanitization.clone(),
                             )
                         };
 
                         if ctx.state.on_change(&text, trigger_window_ms) {
                             log::info!("[Clipboard] Double-copy detected");
 
-                            let sanitized_text = {
-                                let config_state = ctx
-                                    .app
-                                    .state::<std::sync::Mutex<crate::config::AppConfig>>();
-                                let config = config_state.lock().unwrap();
-                                let sanitization_config = config.sanitization.clone();
-                                if sanitization_config.enabled {
-                                    crate::sanitize::sanitize_text(&text, &sanitization_config)
-                                } else {
-                                    text.clone()
-                                }
+                            let sanitized_text = if sanitization_config.enabled {
+                                crate::sanitize::sanitize_text(&text, &sanitization_config)
+                            } else {
+                                text.clone()
                             };
 
                             let final_char_count: usize = sanitized_text.chars().count();

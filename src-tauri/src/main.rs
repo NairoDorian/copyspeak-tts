@@ -532,6 +532,22 @@ fn main() {
                 clipboard::run_clipboard_listener(app_handle, is_listening_clone);
             });
 
+            // --- Pre-warm Piper HTTP server if configured ---
+            {
+                let cfg = app.state::<std::sync::Mutex<config::AppConfig>>();
+                let cfg = cfg.lock().unwrap();
+                if cfg.tts.active_backend == config::TtsEngine::Local && cfg.tts.preset == "piper" {
+                    let data_dir = tts::cli::CliTtsBackend::data_dir();
+                    log::info!("[Startup] Pre-warming Piper server...");
+                    tts::cli::prewarm_piper_server(
+                        cfg.tts.command.clone(),
+                        cfg.tts.voice.clone(),
+                        data_dir,
+                        cfg.tts.cuda,
+                    );
+                }
+            }
+
             // --- Register global hotkey ---
             let hotkey_config = {
                 let cfg = app.state::<std::sync::Mutex<config::AppConfig>>();

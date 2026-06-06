@@ -21,6 +21,7 @@ pub struct PiperServerState {
     pub model_name: String,
     pub port: u16,
     pub cuda: bool,
+    pub client: reqwest::blocking::Client,
 }
 
 pub static PIPER_SERVER: OnceLock<Mutex<Option<PiperServerState>>> = OnceLock::new();
@@ -48,6 +49,133 @@ fn get_free_port() -> Option<u16> {
         .and_then(|listener| listener.local_addr())
         .map(|addr| addr.port())
         .ok()
+}
+
+/// Pre-warm the Piper HTTP server at app startup.
+/// Starts the server in a background thread so the model is loaded into RAM
+/// before the first synthesis request, eliminating the 2-10s cold-start penalty.
+pub fn prewarm_piper_server(command: String, voice: String, data_dir: String, cuda: bool) {
+    std::thread::spawn(move || {
+        log::info!("[TTS] Pre-warming Piper HTTP server for voice: {}", voice);
+
+        let voice_file = if voice.ends_with(".onnx") {
+            voice.clone()
+        } else {
+            format!("{}.onnx", voice)
+        };
+        let mut model_path = std::path::PathBuf::from(&data_dir).join(&voice_file);
+        if !model_path.exists() {
+            let alt_path = std::path::PathBuf::from(&voice);
+            if alt_path.exists() {
+                model_path = alt_path;
+            } else {
+                log::warn!("[TTS] Cannot pre-warm Piper: model file not found at {}", model_path.display());
+                return;
+            }
+        }
+
+        let port = match get_free_port() {
+            Some(p) => p,
+            None => {
+                log::warn!("[TTS] Cannot pre-warm Piper: no free port available");
+                return;
+            }
+        };
+
+        log::info!("[TTS] Starting Piper HTTP server on port {} for model: {}", port, voice);
+
+        let mut cmd = std::process::Command::new(&command);
+        let mut args = vec![
+            "-m".to_string(),
+            "piper.http_server".to_string(),
+            "-m".to_string(),
+            model_path.to_string_lossy().to_string(),
+            "--port".to_string(),
+            port.to_string(),
+            "--host".to_string(),
+            "127.0.0.1".to_string(),
+        ];
+
+        if !data_dir.is_empty() {
+            args.push("--data-dir".to_string());
+            args.push(data_dir.clone());
+        }
+
+        if cuda {
+            args.push("--cuda".to_string());
+        }
+
+        cmd.args(&args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+            if cuda {
+                if let Some(nvidia_paths) = get_nvidia_dll_paths(&command) {
+                    let current_path = std::env::var("PATH").unwrap_or_default();
+                    let new_path = format!("{};{}", nvidia_paths, current_path);
+                    cmd.env("PATH", new_path);
+                }
+            }
+        }
+
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("[TTS] Failed to pre-warm Piper server: {}", e);
+                return;
+            }
+        };
+
+        let client = match reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_millis(500))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => {
+                let _ = child.kill();
+                return;
+            }
+        };
+
+        let url = format!("http://127.0.0.1:{}/voices", port);
+        let start = std::time::Instant::now();
+        let mut ready = false;
+
+        while start.elapsed() < std::time::Duration::from_secs(15) {
+            if let Ok(Some(_)) = child.try_wait() {
+                log::warn!("[TTS] Pre-warm Piper server exited prematurely");
+                return;
+            }
+            if client.get(&url).send().is_ok() {
+                ready = true;
+                break;
+            }
+            let elapsed = start.elapsed().as_millis();
+            let delay = if elapsed < 2000 { 50 } else { 200 };
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+        }
+
+        if !ready {
+            let _ = child.kill();
+            log::warn!("[TTS] Pre-warm Piper server timed out");
+            return;
+        }
+
+        log::info!("[TTS] Piper server pre-warmed on port {}", port);
+
+        let mut server = get_piper_server().lock().unwrap();
+        *server = Some(PiperServerState {
+            child,
+            model_name: voice.clone(),
+            port,
+            cuda,
+            client: reqwest::blocking::Client::new(),
+        });
+    });
 }
 
 #[cfg(windows)]
@@ -194,22 +322,29 @@ fn get_expanded_path() -> String {
 
 #[cfg(windows)]
 fn get_nvidia_dll_paths(python_executable: &str) -> Option<String> {
-    let output = Command::new(python_executable)
-        .args([
-            "-c",
-            "import os, nvidia; print(';'.join([os.path.join(os.path.dirname(nvidia.__file__), p, 'bin') for p in ['cublas', 'cuda_nvrtc', 'cuda_runtime', 'cudnn', 'cufft', 'curand', 'cusolver', 'cusparse', 'nvjitlink'] if os.path.exists(os.path.join(os.path.dirname(nvidia.__file__), p, 'bin'))]))"
-        ])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .ok()?;
+    use std::sync::OnceLock;
+    static NVIDIA_PATHS: OnceLock<Option<String>> = OnceLock::new();
 
-    if output.status.success() {
-        let paths_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !paths_str.is_empty() {
-            return Some(paths_str);
-        }
-    }
-    None
+    NVIDIA_PATHS
+        .get_or_init(|| {
+            let output = Command::new(python_executable)
+                .args([
+                    "-c",
+                    "import os, nvidia; print(';'.join([os.path.join(os.path.dirname(nvidia.__file__), p, 'bin') for p in ['cublas', 'cuda_nvrtc', 'cuda_runtime', 'cudnn', 'cufft', 'curand', 'cusolver', 'cusparse', 'nvjitlink'] if os.path.exists(os.path.join(os.path.dirname(nvidia.__file__), p, 'bin'))]))"
+                ])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output()
+                .ok()?;
+
+            if output.status.success() {
+                let paths_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !paths_str.is_empty() {
+                    return Some(paths_str);
+                }
+            }
+            None
+        })
+        .clone()
 }
 
 pub struct CliTtsBackend {
@@ -380,7 +515,7 @@ impl CliTtsBackend {
             .into_owned()
     }
 
-    fn synthesize_via_server(&self, text: &str, voice: &str) -> Result<Vec<u8>, String> {
+    fn synthesize_via_server(&self, text: &str, voice: &str, speed: f32) -> Result<Vec<u8>, String> {
         let cuda = self.cuda;
         let data_dir = Self::data_dir();
 
@@ -421,7 +556,7 @@ impl CliTtsBackend {
             }
         }
 
-        let port = if need_start {
+        let _port = if need_start {
             let new_port =
                 get_free_port().ok_or_else(|| "Failed to find a free port".to_string())?;
             log::info!(
@@ -472,7 +607,7 @@ impl CliTtsBackend {
                 .map_err(|e| format!("Failed to spawn Piper server: {}", e))?;
 
             // Poll /voices to check if server is ready
-            let client = reqwest::blocking::Client::builder()
+            let health_client = reqwest::blocking::Client::builder()
                 .timeout(std::time::Duration::from_millis(500))
                 .build()
                 .map_err(|e| e.to_string())?;
@@ -486,11 +621,13 @@ impl CliTtsBackend {
                     return Err(format!("Piper server exited prematurely: {:?}", status));
                 }
 
-                if client.get(&url).send().is_ok() {
+                if health_client.get(&url).send().is_ok() {
                     ready = true;
                     break;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                let elapsed = start.elapsed().as_millis();
+                let delay = if elapsed < 2000 { 50 } else { 200 };
+                std::thread::sleep(std::time::Duration::from_millis(delay));
             }
 
             if !ready {
@@ -504,6 +641,7 @@ impl CliTtsBackend {
                 model_name: voice.to_string(),
                 port: new_port,
                 cuda,
+                client: health_client,
             });
             new_port
         } else {
@@ -515,11 +653,20 @@ impl CliTtsBackend {
 
         drop(server);
 
-        // Perform HTTP POST request to synthesize
-        let client = reqwest::blocking::Client::new();
+        // Reuse the server's HTTP client and perform synthesis
+        let server_state = get_piper_server().lock().unwrap();
+        let (client, port) = if let Some(ref state) = *server_state {
+            (Some(state.client.clone()), state.port)
+        } else {
+            return Err("Piper server unexpectedly disappeared".to_string());
+        };
+        let client = client.ok_or_else(|| "Piper server client not available".to_string())?;
+        drop(server_state);
+
         let url = format!("http://127.0.0.1:{}/", port);
         let body = serde_json::json!({
             "text": text,
+            "length_scale": speed,
         });
 
         let response = client
@@ -547,10 +694,10 @@ impl TtsBackend for CliTtsBackend {
         &self.command
     }
 
-    fn synthesize(&self, text: &str, voice: &str, _speed: f32) -> Result<Vec<u8>, TtsError> {
+    fn synthesize(&self, text: &str, voice: &str, speed: f32) -> Result<Vec<u8>, TtsError> {
         if self.is_piper() {
             log::info!("[TTS] Using persistent Piper server for voice: {}", voice);
-            match self.synthesize_via_server(text, voice) {
+            match self.synthesize_via_server(text, voice, speed) {
                 Ok(bytes) => {
                     log::info!("[TTS] Piper synthesis via server completed successfully");
                     return Ok(bytes);

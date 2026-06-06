@@ -213,7 +213,6 @@ pub fn show_hud(app: &AppHandle, envelope: AmplitudeEnvelope, text: Option<Strin
 
     log::info!("Showing HUD for playback");
 
-    // Show window before emitting event
     if let Some(window) = app.get_webview_window("hud") {
         if let Err(e) = window.show() {
             log::error!("Failed to show HUD window: {}", e);
@@ -222,32 +221,15 @@ pub fn show_hud(app: &AppHandle, envelope: AmplitudeEnvelope, text: Option<Strin
         log::warn!("HUD window not found");
     }
 
-    // Spawn a thread so we don't block the caller (possibly on Tokio runtime).
-    let app_clone = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-
-        log::info!("Emitting hud:start event to hud window");
-        log::debug!(
-            "[HUD] Event payload: envelope values={}, text={:?}",
-            envelope.values.len(),
-            text
-        );
-
-        if let Err(e) = app_clone.emit(
-            "hud:start",
-            HudStartPayload {
-                envelope,
-                text,
-                provider,
-                voice,
-            },
-        ) {
-            log::error!("Failed to emit hud:start event: {}", e);
-        } else {
-            log::info!("hud:start emitted");
-        }
-    });
+    let payload = HudStartPayload {
+        envelope,
+        text,
+        provider,
+        voice,
+    };
+    if let Err(e) = app.emit("hud:start", payload) {
+        log::error!("Failed to emit hud:start event: {}", e);
+    }
 }
 
 pub fn show_hud_synthesizing(app: &AppHandle, text: Option<String>) {
@@ -265,7 +247,6 @@ pub fn show_hud_synthesizing(app: &AppHandle, text: Option<String>) {
 
     log::info!("Showing HUD for synthesizing");
 
-    // Show window before emitting event
     if let Some(window) = app.get_webview_window("hud") {
         if let Err(e) = window.show() {
             log::error!("Failed to show HUD window: {}", e);
@@ -274,25 +255,15 @@ pub fn show_hud_synthesizing(app: &AppHandle, text: Option<String>) {
         log::warn!("HUD window not found");
     }
 
-    let app_clone = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-
-        log::info!("Emitting hud:synthesizing event (global)");
-        if let Err(e) = app_clone.emit(
-            "hud:synthesizing",
-            HudSynthesizingPayload {
-                text,
-                provider,
-                voice,
-                duration_ms: None,
-            },
-        ) {
-            log::error!("Failed to emit hud:synthesizing event: {}", e);
-        } else {
-            log::info!("hud:synthesizing emitted");
-        }
-    });
+    let payload = HudSynthesizingPayload {
+        text,
+        provider,
+        voice,
+        duration_ms: None,
+    };
+    if let Err(e) = app.emit("hud:synthesizing", payload) {
+        log::error!("Failed to emit hud:synthesizing event: {}", e);
+    }
 }
 
 /// Show HUD for playback of existing audio file.
@@ -312,7 +283,6 @@ pub fn show_hud_playback(app: &AppHandle, text: Option<String>, audio_duration_m
 
     log::info!("Showing HUD for playback");
 
-    // Show window before emitting event
     if let Some(window) = app.get_webview_window("hud") {
         if let Err(e) = window.show() {
             log::error!("Failed to show HUD window: {}", e);
@@ -321,25 +291,15 @@ pub fn show_hud_playback(app: &AppHandle, text: Option<String>, audio_duration_m
         log::warn!("HUD window not found");
     }
 
-    let app_clone = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-
-        log::info!("Emitting hud:playback_start event (global)");
-        if let Err(e) = app_clone.emit(
-            "hud:playback_start",
-            HudPlaybackStartPayload {
-                text,
-                provider,
-                voice,
-                audio_duration_ms,
-            },
-        ) {
-            log::error!("Failed to emit hud:playback_start event: {}", e);
-        } else {
-            log::info!("hud:playback_start emitted");
-        }
-    });
+    let payload = HudPlaybackStartPayload {
+        text,
+        provider,
+        voice,
+        audio_duration_ms,
+    };
+    if let Err(e) = app.emit("hud:playback_start", payload) {
+        log::error!("Failed to emit hud:playback_start event: {}", e);
+    }
 }
 
 #[derive(Clone, Serialize)]

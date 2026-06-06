@@ -14,15 +14,22 @@ pub(crate) fn cleanup_artifacts(text: &str) -> String {
         static ref MULTI_NEWLINE: Regex = Regex::new(r"\n{3,}").unwrap();
     }
 
-    let mut result = text.to_string();
-
-    // Run core cleanup twice to catch cascading artifacts
-    for _ in 0..2 {
-        result = MULTI_SPACE.replace_all(&result, " ").to_string();
+    fn apply_cleanup_pass(text: &str) -> String {
+        let mut result = MULTI_SPACE.replace_all(text, " ").to_string();
         result = SPACE_BEFORE_PUNCT.replace_all(&result, "$1").to_string();
         result = REPEATED_COMMA.replace_all(&result, ",").to_string();
         result = COMMA_BEFORE_PERIOD.replace_all(&result, ".").to_string();
         result = PUNCT_NO_SPACE.replace_all(&result, "$1 $2").to_string();
+        result
+    }
+
+    let mut result = text.to_string();
+
+    // Run cleanup; re-run once more only if text actually changed
+    result = apply_cleanup_pass(&result);
+    let second_pass = apply_cleanup_pass(&result);
+    if second_pass != result {
+        result = second_pass;
     }
 
     // Remove trailing comma

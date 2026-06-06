@@ -5,11 +5,21 @@ use serde_json::json;
 
 pub struct OpenAiTtsBackend {
     config: OpenAIConfig,
+    client: Client,
+    auth_header: String,
 }
 
 impl OpenAiTtsBackend {
     pub fn new(config: OpenAIConfig) -> Self {
-        Self { config }
+        let client = Client::builder()
+            .pool_max_idle_per_host(2)
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .tcp_nodelay(true)
+            .tcp_keepalive(std::time::Duration::from_secs(60))
+            .build()
+            .expect("Failed to create OpenAI HTTP client");
+        let auth_header = format!("Bearer {}", config.api_key);
+        Self { config, client, auth_header }
     }
 
     /// Execute an async block using the current Tokio runtime if available,
@@ -49,7 +59,7 @@ impl TtsBackend for OpenAiTtsBackend {
             "response_format": "wav",
         });
 
-        let api_key = self.config.api_key.clone();
+        let auth_header = self.auth_header.clone();
 
         // Log request details
         log::info!(
@@ -69,16 +79,18 @@ impl TtsBackend for OpenAiTtsBackend {
 
         let start_time = std::time::Instant::now();
 
-        let response = Self::block_on_async(async {
-            let client = Client::new();
+        let response = {
+            let client = self.client.clone();
+            Self::block_on_async(async move {
             client
                 .post(url)
-                .header("Authorization", format!("Bearer {}", api_key))
+                .header("Authorization", auth_header)
                 .header("Content-Type", "application/json")
                 .json(&body)
                 .send()
                 .await
-        })
+            })
+        }
         .map_err(|e| {
             let elapsed = start_time.elapsed();
             log::error!("OpenAI TTS request failed after {:?}: {}", elapsed, e);

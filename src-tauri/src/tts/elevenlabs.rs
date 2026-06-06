@@ -190,11 +190,19 @@ impl Default for VoiceSettings {
 
 pub struct ElevenLabsTtsBackend {
     config: ElevenLabsConfig,
+    client: Client,
 }
 
 impl ElevenLabsTtsBackend {
     pub fn new(config: ElevenLabsConfig) -> Self {
-        Self { config }
+        let client = Client::builder()
+            .pool_max_idle_per_host(2)
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .tcp_nodelay(true)
+            .tcp_keepalive(std::time::Duration::from_secs(60))
+            .build()
+            .expect("Failed to create ElevenLabs HTTP client");
+        Self { config, client }
     }
 
     /// Execute an async block using the current Tokio runtime if available,
@@ -251,9 +259,9 @@ impl ElevenLabsTtsBackend {
 
         // Perform the full request-response cycle in one block to avoid body truncation
         // that occurs when .send() and .bytes() are split across separate block_on_async calls.
-        let fetch_result: Result<(reqwest::StatusCode, Vec<u8>), TtsError> =
+        let fetch_result: Result<(reqwest::StatusCode, Vec<u8>), TtsError> = {
+            let client = self.client.clone();
             Self::block_on_async(async move {
-                let client = Client::new();
                 let response = client
                     .get(url)
                     .header("xi-api-key", api_key)
@@ -268,7 +276,8 @@ impl ElevenLabsTtsBackend {
                 })?;
 
                 Ok((status, body.to_vec()))
-            });
+            })
+        };
 
         let (status, response_bytes) = fetch_result.map_err(|e| {
             let elapsed = start_time.elapsed();
@@ -466,9 +475,9 @@ impl ElevenLabsTtsBackend {
 
         // Perform the full request-response cycle in one block to avoid body truncation
         // that occurs when .send() and .bytes() are split across separate block_on_async calls.
-        let fetch_result: Result<(reqwest::StatusCode, String), TtsError> =
+        let fetch_result: Result<(reqwest::StatusCode, String), TtsError> = {
+            let client = self.client.clone();
             Self::block_on_async(async move {
-                let client = Client::new();
                 let response = client
                     .get(&url)
                     .header("xi-api-key", api_key)
@@ -484,7 +493,8 @@ impl ElevenLabsTtsBackend {
                     .map_err(|e| TtsError::Http(format!("Failed to read voice response: {}", e)))?;
 
                 Ok((status, body))
-            });
+            })
+        };
 
         let (status, body) = fetch_result.map_err(|e| {
             let elapsed = start_time.elapsed();
@@ -618,8 +628,9 @@ impl TtsBackend for ElevenLabsTtsBackend {
 
         let start_time = std::time::Instant::now();
 
-        let response = Self::block_on_async(async {
-            let client = Client::new();
+        let response = {
+            let client = self.client.clone();
+            Self::block_on_async(async move {
             client
                 .post(&url)
                 .header("xi-api-key", api_key)
@@ -629,7 +640,8 @@ impl TtsBackend for ElevenLabsTtsBackend {
                 .json(&body)
                 .send()
                 .await
-        })
+            })
+        }
         .map_err(|e| {
             let elapsed = start_time.elapsed();
             log::error!("ElevenLabs TTS request failed after {:?}: {}", elapsed, e);

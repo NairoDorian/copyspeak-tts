@@ -17,17 +17,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **"Unload Model" system tray action** — Added a menu item to the tray context menu to manually terminate the background server and unload the model from RAM.
 - **New Rust IPC commands** — Added `get_local_piper_voices` to discover available models and `unload_piper_model` to allow manual unloading of the cached model.
 - **Server teardown hooks** — Hooked server termination into Tauri's `RunEvent::Exit` so the background python server is always cleaned up when the app is closed.
+- **History bulk operations** — Added multi-select checkboxes to every history entry, a "Clear All" button, and a bulk actions toolbar (Select All, Clear Selection, Export Selected, Delete Selected with double-click confirmation) wired through the existing `HistoryBulkActions` component.
+- **History "Clear All" confirmation dialog** — Added an `AlertDialog` confirmation before wiping the entire history, with new i18n keys (`history.clearAll`, `history.clearAllDialogTitle`, `history.clearAllDescription`, `history.confirmClearAll`).
+- **Reusable HTTP connection pooling for all cloud TTS backends** — Each backend (`ElevenLabsTtsBackend`, `OpenAiTtsBackend`, `CartesiaTtsBackend`, and Groq post-process) now holds a single `reqwest::Client` with `tcp_nodelay`, `tcp_keepalive(60s)`, and `pool_max_idle_per_host(2)` configured in `new()`, eliminating TLS handshake + TCP connection setup per synthesis request.
+- **Precomputed `Bearer` header in OpenAI backend** — The `Authorization: Bearer <key>` header is now computed once in `OpenAiTtsBackend::new()` and reused across all requests, avoiding per-request `format!()` allocations.
+- **NVIDIA DLL paths cached via `OnceLock`** — The expensive `python -c "import nvidia..."` subprocess call that discovers GPU library paths now runs only once per app lifetime, cached in a static `OnceLock<Option<String>>`.
+- **Adaptive fragment sizing from telemetry** — `pagination::adaptive_fragment_size()` uses per-engine `chars_per_ms` telemetry (3+ samples required) to dynamically scale the pagination fragment size: fast engines (>20 chars/ms) get 3× the base size (capped at 2000), moderate engines (5–20 chars/ms) get 2× (capped at 1500), slow or unknown engines keep the default.
+- **Parallel cloud fragment synthesis** — For cloud backends (OpenAI, ElevenLabs, Cartesia) with multiple paginated fragments, `speak_queued` now synthesizes up to 3 fragments concurrently via `tokio::task::JoinSet`, then emits results in index order. CLI backends continue to use the existing sequential loop.
+- **Pre-decode next fragment during playback** — When a fragment starts playing, the `PlaybackStore` asynchronously base64-decodes and `decodeAudioData()` the next queued fragment in the background, so when the current fragment ends the next one is ready to play instantly with zero decode gap.
+- **Piper server pre-warm at app startup** — When the active backend is Local with the `piper` preset, `prewarm_piper_server()` spawns the HTTP server in a background thread at app launch, loading the voice model into RAM before the user ever triggers synthesis.
 
 ### Changed
 
 - **Frontend Dependency Upgrades** — Upgraded Svelte to `5.56.1`, `@sveltejs/kit` to `2.63.0`, Vite to `8.0.16`, Vitest to `4.1.8`, and all Tauri frontend modules to their latest v2 releases.
 - **Backend Cargo Upgrades** — Upgraded Rust crate dependencies (`dirs` to v6, `flexi_logger` to v0.31, `winreg` to v0.56, `chrono`, and `log` to their latest patch versions).
 - **CLI synthesis engine** — Intercepts synthesis calls for Piper to route them via the running local HTTP server instead of spawning a new process for every synthesis. Adds fallback to standard CLI execution if server synthesis fails.
+- **Piper HTTP server health-check poll interval** — Reduced from every 100ms to every 50ms for the first 2 seconds, then 200ms thereafter, improving server readiness detection speed.
+- **Piper speed control** — The `_speed` parameter is now passed as `length_scale` in the Piper HTTP API JSON body, allowing playback speed adjustments at the synthesis level.
+- **Piper server `reqwest::blocking::Client` reuse** — The health-check poll client is now stored in `PiperServerState` and reused for all subsequent synthesis HTTP requests instead of creating a fresh `Client::new()` each time.
+- **Backend created once per `speak_queued`** — The `create_backend()` call was hoisted outside the pagination loop so that the same `Arc<Box<dyn TtsBackend>>` (with its shared connection pool) is reused for all fragments in a paginated synthesis.
+- **base64 encoding moved to `spawn_blocking`** — `emit_audio_ready()` and `emit_audio_fragment()` are now async functions that run base64 encoding on tokio's blocking thread pool, preventing CPU-intensive encoding from stalling the async worker thread.
+- **`history-updated` event batched** — The `history-updated` Tauri event is now emitted once at the end of all fragment synthesis instead of per-fragment, avoiding repeated frontend re-renders.
+- **HUD event emission** — Removed `std::thread::spawn` + 50ms `thread::sleep` pattern from `show_hud`, `show_hud_synthesizing`, and `show_hud_playback`. Events are now emitted synchronously with direct `app.emit()`, eliminating OS thread creation overhead per HUD display.
+- **Windows audio preroll** — Reduced from 1200ms to 200ms of near-silent sine wave prepended to audio playback on Windows, reducing dead air before speech starts by 1 second.
+- **`AudioContext` pre-warmed at startup** — `PlaybackStore.setupListeners()` now creates the `AudioContext` and calls `resume()` immediately at app startup instead of lazily on first playback, avoiding a 50–200ms cold-start delay.
+- **Clipboard config read** — Combined two separate `AppConfig` mutex locks (for `trigger_window_ms`/`max_text_length` and for `sanitization_config`) into a single lock acquisition in `clipboard.rs:on_change`, reducing mutex contention.
+- **Cleanup pass conditional** — `cleanup_artifacts()` in the sanitization pipeline now runs a single pass and only re-runs if the text actually changed, instead of unconditionally running twice.
 
 ### Fixed
 
 - **System Tray and Configuration Sync** — Fixed the listening state toggle sync by making `set_listening` IPC command update and persist the `AppConfig` to disk and emit the `config-changed` event.
 - **Listening State Initialization** — Initialized the tray listening menu item label dynamically on startup using the user's persistent config instead of hardcoding `"● Listening"`.
+- **Chrono timestamp allocation** — Moved `chrono::Local::now().format(...)` inside the `is_debug_mode()` guard in `clipboard.rs`, avoiding a heap allocation on every clipboard change in release builds.
+
+### Performance
+
+- **base64 decode optimization** — Replaced the manual `for` loop over `charCodeAt(i)` with `Uint8Array.from(binary, c => c.charCodeAt(0))` in both `handleAudioReady` and `predecodeNextFragment`, leveraging V8's internal typed-array fast path for ~2M fewer JavaScript VM bytecode iterations per fragment.
+- **WAV conversion optimization** — Rewrote `audioBufferToWavBlob()` to use a single `Int16Array` view over the output buffer with interleaved channel writes, replacing the inner-per-sample `DataView.setInt16()` loop for ~10× faster PCM sample writing.
+- **Reduced `ArrayBuffer` copies** — Removed the redundant `arrayBuffer.slice(0)` copy in `handleAudioReady`; `decodeAudioData` now reads directly from the original buffer and `_originalBytes` is set once (not twice).
+- **Analyser `Uint8Array` reuse** — `AudioAnalyser.start()` now allocates the frequency data `Uint8Array` once at `setup()` and reuses it every frame in the rAF loop instead of calling `new Uint8Array(...)` 60 times per second.
+- **OpenAI header precomputation** — `format!("Bearer {}", api_key)` is now computed once in `new()` and stored as `auth_header: String`, avoiding a per-request allocation.
 - **Tauri Plugin Registration** — Removed a duplicate registration of `tauri-plugin-global-shortcut` builder in `main.rs`.
 - **Pagination Configuration Bypass** — Fixed `synthesize_paginated` to respect the user's settings by passing `pagination_config` from active configuration instead of hardcoding `PaginationConfig::default()`.
 - **Config Validation Unit Tests** — Explicitly set `active_backend = TtsEngine::Local` in local validation tests in `tests.rs` to prevent failure when the default project engine is configured to a non-local engine.

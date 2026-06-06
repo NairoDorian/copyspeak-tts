@@ -434,6 +434,10 @@
     "deleteEntryOnly": "This will permanently delete the history entry. This action cannot be undone.",
     "cancel": "Cancel",
     "confirmDelete": "Delete",
+    "clearAll": "Clear All",
+    "clearAllDialogTitle": "Clear all history?",
+    "clearAllDescription": "This will permanently delete ALL history entries and their audio files. This action cannot be undone.",
+    "confirmClearAll": "Clear All",
     "toast": {
       "playing": "Playing audio from history",
       "playingFragments": "Playing all fragments",

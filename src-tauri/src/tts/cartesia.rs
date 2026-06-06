@@ -8,11 +8,19 @@ const CARTESIA_VERSION: &str = "2024-06-10";
 
 pub struct CartesiaTtsBackend {
     config: CartesiaConfig,
+    client: Client,
 }
 
 impl CartesiaTtsBackend {
     pub fn new(config: CartesiaConfig) -> Self {
-        Self { config }
+        let client = Client::builder()
+            .pool_max_idle_per_host(2)
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .tcp_nodelay(true)
+            .tcp_keepalive(std::time::Duration::from_secs(60))
+            .build()
+            .expect("Failed to create Cartesia HTTP client");
+        Self { config, client }
     }
 
     fn block_on_async<F, T>(f: F) -> T
@@ -59,8 +67,9 @@ impl TtsBackend for CartesiaTtsBackend {
         let start_time = std::time::Instant::now();
         let api_key = self.config.api_key.clone();
 
-        let response = Self::block_on_async(async {
-            let client = Client::new();
+        let response = {
+            let client = self.client.clone();
+            Self::block_on_async(async move {
             client
                 .post(CARTESIA_TTS_URL)
                 .header("X-API-Key", api_key)
@@ -69,7 +78,8 @@ impl TtsBackend for CartesiaTtsBackend {
                 .json(&body)
                 .send()
                 .await
-        })
+            })
+        }
         .map_err(|e| {
             log::error!(
                 "Cartesia TTS request failed after {:?}: {}",

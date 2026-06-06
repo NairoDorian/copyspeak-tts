@@ -9,6 +9,8 @@ export interface QueuedFragment {
   index: number;
   total: number;
   text: string;
+  /** Pre-decoded audio buffer (filled by PlaybackStore for instant playback) */
+  decodedBuffer?: AudioBuffer;
 }
 
 export interface FragmentQueueHandlers {

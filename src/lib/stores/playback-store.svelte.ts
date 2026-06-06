@@ -21,7 +21,7 @@ import { getEffect } from "./playback/effects/registry.js";
 import { FragmentQueue, type QueuedFragment } from "./playback/fragment-queue.js";
 import { hudStore } from "./hud-store.svelte.js";
 
-const WINDOWS_AUDIO_PREROLL_MS = 1200;
+const WINDOWS_AUDIO_PREROLL_MS = 200;
 
 class PlaybackStore {
   isPlaying = $state(false);
@@ -67,7 +67,7 @@ class PlaybackStore {
         );
         this.currentFragmentIndex = fragment.index;
         this.totalFragments = fragment.total;
-        await this.handleAudioReady(fragment.audioBase64);
+        await this.handleAudioReady(fragment);
       },
       onQueueComplete: () => {
         console.log("[PlaybackStore] onQueueComplete");
@@ -154,54 +154,71 @@ class PlaybackStore {
     return isTauri && navigator.userAgent.includes("Windows");
   }
 
-  async handleAudioReady(base64: string): Promise<void> {
+  async handleAudioReady(fragment: QueuedFragment): Promise<void> {
+    const base64 = fragment.audioBase64;
     console.log("[PlaybackStore] handleAudioReady called, base64 length:", base64.length);
-    const binary = atob(base64);
-    const arrayBuffer = new ArrayBuffer(binary.length);
-    const bytes = new Uint8Array(arrayBuffer);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
+
+    // Use pre-decoded buffer if available (from background pre-decode)
+    if (fragment.decodedBuffer) {
+      this._decodedBuffer = fragment.decodedBuffer;
+      console.log("[PlaybackStore] Using pre-decoded buffer, skipping decodeAudioData");
+    } else {
+      const binary = atob(base64);
+      const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+      const arrayBuffer = new ArrayBuffer(bytes.byteLength);
+      new Uint8Array(arrayBuffer).set(bytes);
+
+      this._originalBytes = arrayBuffer;
+      if (this._cachedPitchUrl) {
+        URL.revokeObjectURL(this._cachedPitchUrl.url);
+        this._cachedPitchUrl = null;
+      }
+
+      // Wire AnalyserNode once per audio element (guard prevents double-wiring)
+      if (this._audioEl && this._audioCtx && !this._analyser.getAnalyser()) {
+        this._analyser.setup(this._audioEl, this._audioCtx, {
+          emitTo: this._emitTo
+        });
+      }
+
+      try {
+        this._decodedBuffer = await this._audioCtx!.decodeAudioData(arrayBuffer);
+      } catch (e) {
+        this.error = `Audio decode error: ${e}`;
+        return;
+      }
     }
 
-    this._originalBytes = arrayBuffer.slice(0);
-    if (this._cachedPitchUrl) {
-      URL.revokeObjectURL(this._cachedPitchUrl.url);
-      this._cachedPitchUrl = null;
+    if (this._decodedBuffer) {
+      const accurateDurationMs = Math.round(this._decodedBuffer.duration * 1000);
+      hudStore.setAccurateDurationMs(accurateDurationMs);
+      this._emit?.("hud:audio-duration", accurateDurationMs);
     }
-
-    if (!this._audioCtx) {
-      this._audioCtx = new AudioContext();
+    const url = await this.buildPlaybackUrl(this.pitch);
+    if (this._audioEl && url) {
+      this._audioEl.src = url;
+      this._analyser.start();
+      this.playAudio();
     }
+    this.hasCachedAudio = true;
 
-    // Resume AudioContext if suspended (required on clean Windows 11 / strict autoplay policies)
-    if (this._audioCtx.state === "suspended") {
-      await this._audioCtx.resume();
-    }
+    // Pre-decode the next fragment in the background while this one plays
+    this.predecodeNextFragment();
+  }
 
-    // Wire AnalyserNode once per audio element (guard prevents double-wiring)
-    if (this._audioEl && this._audioCtx && !this._analyser.getAnalyser()) {
-      this._analyser.setup(this._audioEl, this._audioCtx, {
-        emitTo: this._emitTo
-      });
-    }
+  private async predecodeNextFragment(): Promise<void> {
+    const fragments = this._fragmentQueue.getQueue();
+    if (fragments.length < 2) return;
+    const nextFragment = fragments[1]; // [0] is current, [1] is next
+    if (nextFragment.decodedBuffer || !this._audioCtx) return;
 
+    const binary = atob(nextFragment.audioBase64);
+    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
     try {
-      this._decodedBuffer = await this._audioCtx.decodeAudioData(arrayBuffer.slice(0));
-      if (this._decodedBuffer) {
-        const accurateDurationMs = Math.round(this._decodedBuffer.duration * 1000);
-        hudStore.setAccurateDurationMs(accurateDurationMs);
-        // Emit to HUD window for cross-window state sync
-        this._emit?.("hud:audio-duration", accurateDurationMs);
-      }
-      const url = await this.buildPlaybackUrl(this.pitch);
-      if (this._audioEl && url) {
-        this._audioEl.src = url;
-        this._analyser.start(); // Start amplitude capture BEFORE audio plays
-        this.playAudio();
-      }
-      this.hasCachedAudio = true;
-    } catch (e) {
-      this.error = `Audio decode error: ${e}`;
+      nextFragment.decodedBuffer = await this._audioCtx.decodeAudioData(bytes.buffer.slice(0));
+      console.log("[PlaybackStore] Pre-decoded next fragment", nextFragment.index);
+    } catch {
+      // Silently fail - will decode normally when it's time
     }
   }
 
@@ -334,8 +351,12 @@ class PlaybackStore {
       this._emitTo = emitTo;
       console.log("[PlaybackStore] event API loaded");
 
-      // Note: AnalyserNode is set up in handleAudioReady once we have an AudioContext
-      // _audioCtx is null here until audio is first decoded
+      // Pre-warm AudioContext at startup to avoid cold-start delay on first playback
+      this._audioCtx = new AudioContext();
+      if (this._audioCtx.state === "suspended") {
+        await this._audioCtx.resume();
+      }
+      console.log("[PlaybackStore] AudioContext pre-warmed");
 
       // Legacy single audio-ready event (for non-paginated playback)
       const unAudioReady = await listen<string>("audio-ready", async (e) => {
