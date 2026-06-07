@@ -34,13 +34,63 @@ pub fn unload_piper_model_internal() -> bool {
     let mut server = get_piper_server().lock().unwrap();
     if let Some(mut state) = server.take() {
         log::info!(
-            "[TTS] Unloading Piper model: killing server on port {}",
+            "[Piper] Unloading model: killing server on port {}",
             state.port
         );
         let _ = state.child.kill();
+        let _ = state.child.wait();
+        log::info!("[Piper] Server process terminated on port {}", state.port);
         true
     } else {
         false
+    }
+}
+
+/// Restart the Piper HTTP server with new settings (model, CUDA, etc).
+/// Kills any existing server first, then starts a fresh one.
+/// Called when engine config changes (voice, CUDA) via set_config.
+pub fn restart_piper_server(command: String, voice: String, data_dir: String, cuda: bool) {
+    log::info!("[Piper] Restart requested — voice: {}, cuda: {}", voice, cuda);
+
+    // Kill existing server first
+    let had_server = unload_piper_model_internal();
+    if had_server {
+        log::info!("[Piper] Killed existing server before restart");
+    }
+
+    // Start new server in background
+    prewarm_piper_server(command, voice, data_dir, cuda);
+}
+
+/// Return the current Piper server status for the control server /health check.
+#[derive(serde::Serialize)]
+pub struct PiperServerStatus {
+    pub running: bool,
+    pub model: Option<String>,
+    pub port: Option<u16>,
+    pub cuda: bool,
+    pub ready: bool,
+}
+
+pub fn get_piper_server_status() -> PiperServerStatus {
+    let mut server = get_piper_server().lock().unwrap();
+    if let Some(ref mut state) = *server {
+        let is_alive = matches!(state.child.try_wait(), Ok(None));
+        PiperServerStatus {
+            running: is_alive,
+            model: Some(state.model_name.clone()),
+            port: Some(state.port),
+            cuda: state.cuda,
+            ready: is_alive,
+        }
+    } else {
+        PiperServerStatus {
+            running: false,
+            model: None,
+            port: None,
+            cuda: false,
+            ready: false,
+        }
     }
 }
 
@@ -51,12 +101,13 @@ fn get_free_port() -> Option<u16> {
         .ok()
 }
 
-/// Pre-warm the Piper HTTP server at app startup.
+/// Pre-warm the Piper HTTP server at app startup or after config change.
 /// Starts the server in a background thread so the model is loaded into RAM
 /// before the first synthesis request, eliminating the 2-10s cold-start penalty.
 pub fn prewarm_piper_server(command: String, voice: String, data_dir: String, cuda: bool) {
     std::thread::spawn(move || {
-        log::info!("[TTS] Pre-warming Piper HTTP server for voice: {}", voice);
+        let start = std::time::Instant::now();
+        log::info!("[Piper] Pre-warming server — voice: {}, cuda: {}", voice, cuda);
 
         let voice_file = if voice.ends_with(".onnx") {
             voice.clone()
@@ -69,7 +120,7 @@ pub fn prewarm_piper_server(command: String, voice: String, data_dir: String, cu
             if alt_path.exists() {
                 model_path = alt_path;
             } else {
-                log::warn!("[TTS] Cannot pre-warm Piper: model file not found at {}", model_path.display());
+                log::warn!("[Piper] Pre-warm failed: model file not found at {}", model_path.display());
                 return;
             }
         }
@@ -77,12 +128,14 @@ pub fn prewarm_piper_server(command: String, voice: String, data_dir: String, cu
         let port = match get_free_port() {
             Some(p) => p,
             None => {
-                log::warn!("[TTS] Cannot pre-warm Piper: no free port available");
+                log::warn!("[Piper] Pre-warm failed: no free port available");
                 return;
             }
         };
 
-        log::info!("[TTS] Starting Piper HTTP server on port {} for model: {}", port, voice);
+        let model_display = model_path.display();
+        log::info!("[Piper] Starting HTTP server on port {} — model: {}, cuda: {}", port, model_display, cuda);
+        let server_start = std::time::Instant::now();
 
         let mut cmd = std::process::Command::new(&command);
         let mut args = vec![
@@ -125,7 +178,7 @@ pub fn prewarm_piper_server(command: String, voice: String, data_dir: String, cu
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
-                log::warn!("[TTS] Failed to pre-warm Piper server: {}", e);
+                log::warn!("[Piper] Pre-warm failed: spawn error — {}", e);
                 return;
             }
         };
@@ -137,35 +190,43 @@ pub fn prewarm_piper_server(command: String, voice: String, data_dir: String, cu
             Ok(c) => c,
             Err(_) => {
                 let _ = child.kill();
+                log::warn!("[Piper] Pre-warm failed: could not build HTTP client");
                 return;
             }
         };
 
         let url = format!("http://127.0.0.1:{}/voices", port);
-        let start = std::time::Instant::now();
+        let poll_start = std::time::Instant::now();
         let mut ready = false;
 
-        while start.elapsed() < std::time::Duration::from_secs(15) {
-            if let Ok(Some(_)) = child.try_wait() {
-                log::warn!("[TTS] Pre-warm Piper server exited prematurely");
+        while poll_start.elapsed() < std::time::Duration::from_secs(15) {
+            if let Ok(Some(status)) = child.try_wait() {
+                log::warn!("[Piper] Pre-warm failed: server exited with {:?} after {:?}", status.code(), poll_start.elapsed());
                 return;
             }
             if client.get(&url).send().is_ok() {
                 ready = true;
                 break;
             }
-            let elapsed = start.elapsed().as_millis();
+            let elapsed = poll_start.elapsed().as_millis();
             let delay = if elapsed < 2000 { 50 } else { 200 };
             std::thread::sleep(std::time::Duration::from_millis(delay));
         }
 
         if !ready {
             let _ = child.kill();
-            log::warn!("[TTS] Pre-warm Piper server timed out");
+            log::warn!("[Piper] Pre-warm failed: timed out after {:?}", poll_start.elapsed());
             return;
         }
 
-        log::info!("[TTS] Piper server pre-warmed on port {}", port);
+        let total_duration = start.elapsed();
+        log::info!(
+            "[Piper] Server ready on port {} — model loaded in {:.1}s (startup: {:.1}s, poll: {:.1}s)",
+            port,
+            total_duration.as_secs_f64(),
+            server_start.elapsed().as_secs_f64(),
+            poll_start.elapsed().as_secs_f64()
+        );
 
         let mut server = get_piper_server().lock().unwrap();
         *server = Some(PiperServerState {
@@ -545,7 +606,7 @@ impl CliTtsBackend {
                 need_start = false;
             } else {
                 log::info!(
-                    "[TTS] Stopping running Piper server (model: {}, cuda: {}) to start new one (model: {}, cuda: {})",
+                    "[Piper] Restarting server — model change (was: {}, cuda: {}) → (new: {}, cuda: {})",
                     state.model_name,
                     state.cuda,
                     voice,
@@ -560,7 +621,7 @@ impl CliTtsBackend {
             let new_port =
                 get_free_port().ok_or_else(|| "Failed to find a free port".to_string())?;
             log::info!(
-                "[TTS] Starting Piper HTTP server on port {} for model: {}",
+                "[Piper] Starting HTTP server on port {} — model: {}",
                 new_port,
                 voice
             );
@@ -635,7 +696,7 @@ impl CliTtsBackend {
                 return Err("Timeout waiting for Piper server to start".to_string());
             }
 
-            log::info!("[TTS] Piper HTTP server is ready on port {}", new_port);
+            log::info!("[Piper] HTTP server ready on port {} — took {:.1}s", new_port, start.elapsed().as_secs_f64());
             *server = Some(PiperServerState {
                 child,
                 model_name: voice.to_string(),
@@ -696,15 +757,16 @@ impl TtsBackend for CliTtsBackend {
 
     fn synthesize(&self, text: &str, voice: &str, speed: f32) -> Result<Vec<u8>, TtsError> {
         if self.is_piper() {
-            log::info!("[TTS] Using persistent Piper server for voice: {}", voice);
+            log::info!("[Piper] Using persistent server for voice: {} (cuda: {})", voice, self.cuda);
+            let synth_start = std::time::Instant::now();
             match self.synthesize_via_server(text, voice, speed) {
                 Ok(bytes) => {
-                    log::info!("[TTS] Piper synthesis via server completed successfully");
+                    log::info!("[Piper] Synthesis via server completed — {} bytes in {:.1}s", bytes.len(), synth_start.elapsed().as_secs_f64());
                     return Ok(bytes);
                 }
                 Err(e) => {
                     log::warn!(
-                        "[TTS] Piper server synthesis failed: {}. Falling back to standard CLI execution.",
+                        "[Piper] Server synthesis failed: {}. Falling back to CLI.",
                         e
                     );
                 }

@@ -82,7 +82,7 @@ pub fn set_config(
         return Err(format!("Validation failed: {}", error_messages.join("; ")));
     }
 
-    let (old_mode, old_volume, old_autostart, old_debug_mode, old_listen_enabled, old_hotkey) = {
+    let (old_mode, old_volume, old_autostart, old_debug_mode, old_listen_enabled, old_hotkey, old_tts_config) = {
         let cfg = config.lock().unwrap();
         (
             cfg.playback.on_retrigger.clone(),
@@ -91,6 +91,7 @@ pub fn set_config(
             cfg.general.debug_mode,
             cfg.trigger.listen_enabled,
             cfg.hotkey.clone(),
+            cfg.tts.clone(),
         )
     };
     let mode_changed = old_mode != new_config.playback.on_retrigger;
@@ -99,6 +100,7 @@ pub fn set_config(
     let debug_mode_changed = old_debug_mode != new_config.general.debug_mode;
     let listen_enabled_changed = old_listen_enabled != new_config.trigger.listen_enabled;
     let hotkey_changed = old_hotkey != new_config.hotkey;
+    let tts_changed = old_tts_config != new_config.tts;
 
     if crate::logging::is_debug_mode() {
         log::debug!(
@@ -113,6 +115,14 @@ pub fn set_config(
     }
 
     let listen_enabled_value = new_config.trigger.listen_enabled;
+    let tts_for_server = if tts_changed
+        && new_config.tts.active_backend == crate::config::TtsEngine::Local
+        && new_config.tts.preset == "piper"
+    {
+        Some(new_config.tts.clone())
+    } else {
+        None
+    };
 
     let mut cfg = config.lock().unwrap();
     *cfg = new_config;
@@ -167,6 +177,22 @@ pub fn set_config(
         if let Err(e) = crate::register_hotkey(&app, &new_hotkey) {
             log::error!("[Config] Failed to re-register hotkey: {}", e);
         }
+    }
+
+    // Restart Piper server if TTS config changed
+    if let Some(tts_cfg) = tts_for_server {
+        let data_dir = crate::tts::cli::CliTtsBackend::data_dir();
+        log::info!(
+            "[Piper] Config change detected — restarting server (voice: {}, cuda: {})",
+            tts_cfg.voice,
+            tts_cfg.cuda
+        );
+        crate::tts::cli::restart_piper_server(
+            tts_cfg.command,
+            tts_cfg.voice,
+            data_dir,
+            tts_cfg.cuda,
+        );
     }
 
     // Emit config-changed event so frontend can react

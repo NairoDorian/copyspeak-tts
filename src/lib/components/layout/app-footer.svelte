@@ -349,9 +349,8 @@
       newConfig.tts.preset = engine.preset!;
       newConfig.tts.command = engine.command!;
       newConfig.tts.args_template = engine.argsTemplate!;
-      if (!newConfig.tts.voice) {
-        newConfig.tts.voice = DEFAULT_VOICES[engine.id];
-      }
+      // Always set default voice when switching to a local engine
+      newConfig.tts.voice = DEFAULT_VOICES[engine.id];
     }
 
     try {

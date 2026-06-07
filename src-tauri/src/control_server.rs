@@ -2,6 +2,7 @@ use crate::audio::AudioPlayer;
 use crate::config::{self, AppConfig, EffectId, TtsEngine};
 use crate::history::HistoryLog;
 use crate::telemetry;
+use crate::tts::cli;
 use serde::Deserialize;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -22,6 +23,7 @@ struct SpeakRequest {
 
 enum ControlRequest {
     Health,
+    PiperStatus,
     Speak(SpeakRequest),
 }
 
@@ -74,6 +76,11 @@ fn handle_connection(mut stream: TcpStream, app: AppHandle) {
     let response = match read_result.and_then(|()| parse_request(&buffer)) {
         Ok(ControlRequest::Health) => {
             http_response(200, "OK", r#"{"ok":true,"app":"CopySpeak TTS"}"#)
+        }
+        Ok(ControlRequest::PiperStatus) => {
+            let status = cli::get_piper_server_status();
+            let body = serde_json::to_string(&status).unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string());
+            http_response(200, "OK", &body)
         }
         Ok(ControlRequest::Speak(request)) => {
             match tauri::async_runtime::block_on(speak(app.clone(), request)) {
@@ -136,8 +143,11 @@ fn parse_request(buffer: &[u8]) -> Result<ControlRequest, (u16, String)> {
     if request_line.starts_with("GET /health ") {
         return Ok(ControlRequest::Health);
     }
+    if request_line.starts_with("GET /piper-status ") {
+        return Ok(ControlRequest::PiperStatus);
+    }
     if !request_line.starts_with("POST /speak ") {
-        return Err((404, "expected GET /health or POST /speak".to_string()));
+        return Err((404, "expected GET /health, GET /piper-status, or POST /speak".to_string()));
     }
 
     let content_length = content_length(&headers).unwrap_or(0);

@@ -538,7 +538,7 @@ fn main() {
                 let cfg = cfg.lock().unwrap();
                 if cfg.tts.active_backend == config::TtsEngine::Local && cfg.tts.preset == "piper" {
                     let data_dir = tts::cli::CliTtsBackend::data_dir();
-                    log::info!("[Startup] Pre-warming Piper server...");
+                    log::info!("[Piper] Auto-starting server at app launch (voice: {}, cuda: {})", cfg.tts.voice, cfg.tts.cuda);
                     tts::cli::prewarm_piper_server(
                         cfg.tts.command.clone(),
                         cfg.tts.voice.clone(),

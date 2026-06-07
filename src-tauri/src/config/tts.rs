@@ -19,7 +19,7 @@ impl Default for TtsEngine {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OpenAIConfig {
     pub api_key: String,
     pub model: String,
@@ -43,7 +43,7 @@ impl OpenAIConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ElevenLabsConfig {
     pub api_key: String,
     pub voice_id: String,
@@ -103,7 +103,7 @@ impl ElevenLabsConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CartesiaConfig {
     pub api_key: String,
     pub model_id: String,
@@ -133,7 +133,7 @@ impl CartesiaConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct TtsConfig {
     pub active_backend: TtsEngine,
