@@ -228,6 +228,25 @@ pub fn prewarm_piper_server(command: String, voice: String, data_dir: String, cu
             poll_start.elapsed().as_secs_f64()
         );
 
+        // Warm-up: send a minimal text to force ONNX runtime JIT / GPU kernel init.
+        // This makes the FIRST real synthesis fast instead of paying the warm-up penalty.
+        let warmup_client = reqwest::blocking::Client::new();
+        let warmup_url = format!("http://127.0.0.1:{}/", port);
+        let warmup_body = serde_json::json!({ "text": "." });
+        let warmup_start = std::time::Instant::now();
+        match warmup_client.post(&warmup_url).json(&warmup_body).send() {
+            Ok(resp) => {
+                let _ = resp.bytes(); // discard — not saved, not played
+                log::info!(
+                    "[Piper] Warm-up synthesis completed in {:.1}s (1st-inference JIT/GPU init)",
+                    warmup_start.elapsed().as_secs_f64()
+                );
+            }
+            Err(e) => {
+                log::warn!("[Piper] Warm-up synthesis failed: {}. First real synthesis will be slower.", e);
+            }
+        }
+
         let mut server = get_piper_server().lock().unwrap();
         *server = Some(PiperServerState {
             child,
