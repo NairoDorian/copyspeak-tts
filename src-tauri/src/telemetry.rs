@@ -9,7 +9,7 @@ use std::sync::Mutex;
 
 /// Character count buckets for timing estimates.
 /// Smaller buckets for short texts (higher variance), larger for long texts.
-const CHAR_BUCKETS: &[u32] = &[0, 500, 2000, 5000, 10000, std::u32::MAX];
+const CHAR_BUCKETS: &[u32] = &[0, 500, 2000, 5000, 10000, u32::MAX];
 
 /// Get the bucket index for a given character count.
 pub fn get_bucket_index(char_count: usize) -> usize {
@@ -20,15 +20,6 @@ pub fn get_bucket_index(char_count: usize) -> usize {
         }
     }
     CHAR_BUCKETS.len() - 2
-}
-
-/// Single timing entry for a synthesis operation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct TimingSample {
-    pub duration_ms: u64,
-    pub char_count: u32,
-    pub timestamp: DateTime<Utc>,
 }
 
 /// Aggregated timing data for a specific backend/voice/bucket.
@@ -301,7 +292,7 @@ pub fn record_sample(
     let mut tel = telemetry.lock().unwrap();
     tel.record(backend, voice, char_count, duration_ms);
     let count = SAMPLE_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
-    if count % SAVE_EVERY_N_SAMPLES == 0 {
+    if count.is_multiple_of(SAVE_EVERY_N_SAMPLES) {
         save(&tel);
     }
 }

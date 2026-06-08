@@ -42,14 +42,13 @@ fn detect_sentence_boundaries(text: &str) -> Vec<SentenceBoundary> {
             None => break,
         };
 
-        if is_sentence_end(c) {
-            if !is_abbreviation_at(text, i) {
+        if is_sentence_end(c)
+            && !is_abbreviation_at(text, i) {
                 boundaries.push(SentenceBoundary {
                     position: i,
                     delimiter: c,
                 });
             }
-        }
 
         i += c.len_utf8();
     }
@@ -302,7 +301,7 @@ pub fn estimate_fragment_count(text: &str, config: &PaginationConfig) -> usize {
 
     let boundaries = detect_sentence_boundaries(text);
     if boundaries.is_empty() {
-        return (text_len + max_size - 1) / max_size;
+        return text_len.div_ceil(max_size);
     }
 
     let mut count = 1;
@@ -323,7 +322,7 @@ pub fn estimate_fragment_count(text: &str, config: &PaginationConfig) -> usize {
 
             let lone_len = text[fragment_start..sentence_end].chars().count();
             if lone_len > max_size {
-                count += (lone_len + max_size - 1) / max_size - 1;
+                count += lone_len.div_ceil(max_size) - 1;
                 fragment_start = sentence_end;
             }
         }

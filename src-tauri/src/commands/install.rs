@@ -8,7 +8,7 @@ use std::process::Command;
 const INSTALLER_SCRIPT: &str = include_str!("../../../install-kittentts.ps1");
 const CLI_SCRIPT: &str = include_str!("../../../kittentts-cli.py");
 
-fn write_to_temp(content: &str, temp_dir: &PathBuf, filename: &str) -> io::Result<PathBuf> {
+fn write_to_temp(content: &str, temp_dir: &std::path::Path, filename: &str) -> io::Result<PathBuf> {
     let dest = temp_dir.join(filename);
     fs::write(&dest, content)?;
     Ok(dest)

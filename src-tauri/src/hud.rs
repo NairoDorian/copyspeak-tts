@@ -320,6 +320,7 @@ pub struct SynthesisProgressPayload {
     pub processed_chars: usize,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn emit_synthesis_progress(
     app: &AppHandle,
     estimated_total_ms: Option<u64>,

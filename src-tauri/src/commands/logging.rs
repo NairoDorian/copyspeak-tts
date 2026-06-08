@@ -31,7 +31,7 @@ pub fn get_logs(max_lines: Option<usize>) -> Result<String, String> {
         None => return Ok("No log file found.".to_string()),
     };
 
-    let content = std::fs::read_to_string(&log_file.path())
+    let content = std::fs::read_to_string(log_file.path())
         .map_err(|e| format!("Failed to read log file: {}", e))?;
 
     // If max_lines is specified, return only the last N lines

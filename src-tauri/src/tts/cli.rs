@@ -1019,9 +1019,7 @@ impl TtsBackend for CliTtsBackend {
             let _ = std::fs::remove_file(&input_path);
             let _ = std::fs::remove_file(&output_path);
             log::error!("[CLI TTS] Output file is empty: {}", output_path);
-            return Err(TtsError::OutputNotFound(format!(
-                "TTS engine created an empty audio file. The TTS synthesis may have failed."
-            )));
+            return Err(TtsError::OutputNotFound("TTS engine created an empty audio file. The TTS synthesis may have failed.".to_string()));
         }
 
         if crate::logging::is_debug_mode() {

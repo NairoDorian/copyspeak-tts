@@ -123,6 +123,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unused macro in `logging.rs`** — Removed `debug_log!` macro (never invoked).
 - **Dead import in `main.rs`** — Removed `mod history_manager;` declaration.
 
+- **Removed `is_autostart_enabled()`** — 29-line function plus its test, never called outside its own test.
+- **Removed `ElevenLabsOutputFormat::is_playable_by_rodio()`** — 16-line method, never called.
+- **Removed `ElevenLabsTtsBackend::get_voices()`** — 15-line method wrapping `list_voices()` into `Vec<Voice>`, never called.
+- **Removed `ElevenLabsTtsBackend::resolve_voice_name()`** — 3-line instance method wrapper for static resolver, never called.
+- **Removed `TimingSample` struct** — 7-line struct in `telemetry.rs`, never constructed.
+- **Removed `HistoryLog::get_entry_by_file_path_mut()`** — 9-line method, never called.
+- **Removed `HistoryLog::get_file_path()`** — 8-line method, never called.
+- **Removed `HistoryLog::get_entry_file_size()`** — 3-line method, never called.
+- **Removed `HistoryLog::update_file_format()`** — 11-line method, never called.
+
+### Changed
+
+- **Compile-time dead code verification** — Removed `#![allow(dead_code)]` from `impl HistoryLog` block; 4 genuinely dead methods identified and removed. Remaining `#[allow(dead_code)]` annotations are now scoped to individual items with explicit justification (trait dynamic dispatch, test-only helpers).
+- **Derivable `Default` impls replaced** — `EffectId`, `CloseBehavior`, `AppearanceMode`, `AudioFormat`, `StorageMode`, `TtsEngine`, `ElevenLabsOutputFormat`, and `ElevenLabsVoice` now use `#[derive(Default)]` with `#[default]` variant markers instead of manual `impl Default` blocks (clippy `derivable_impls`).
+- **Collapsed nested conditionals and streamlined expressions** — `if is_sentence_end(c) { if !is_abbreviation_at(...) { ... } }` collapsed into a single condition; `map_or(false, ...)` replaced with `is_some_and()`; `sort_by` replaced with `sort_by_key`; `match` for single branch replaced with `if`; manual range checks replaced with `contains()`; consecutive `str::replace` calls merged; manual `div_ceil` implementations replaced with `.div_ceil()`; `useless_format` and `useless_conversion` calls replaced with `.to_string()` or direct expressions (clippy `collapsible_if`, `unnecessary_map_or`, `unnecessary_sort_by`, `single_match`, `manual_range_contains`, `collapsible_str_replace`, `manual_div_ceil`, `useless_format`, `useless_conversion`).
+- **Type annotations tightened** — `&PathBuf` → `&Path` in `write_to_temp()`, `&Vec<u8>` → `&[u8]` in `spawn_fragment_emit()`, `std::u32::MAX` → `u32::MAX` (clippy `ptr_arg`, `legacy_numeric_constants`).
+- **Lint scope reduced** — `#[allow(clippy::too_many_arguments)]` moved from module-level to individual function annotations on 8 heavy-parameter functions; `#[allow(clippy::match_like_matches_macro)]` and `#[allow(clippy::needless_range_loop)]` scoped to single functions in `clipboard.rs` and `audio/wav.rs` respectively.
+
 ## [0.1.5] - 2026-05-20
 
 ### Added

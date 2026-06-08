@@ -115,7 +115,7 @@ pub(super) fn parse_wav_header(bytes: &[u8]) -> Result<WavInfo, String> {
         ));
     }
 
-    if sample_rate < 8000 || sample_rate > 192000 {
+    if !(8000..=192000).contains(&sample_rate) {
         return Err(format!(
             "Invalid sample rate: {} Hz. Valid range is 8000-192000 Hz.",
             sample_rate
@@ -229,6 +229,7 @@ pub fn extract_envelope(audio_bytes: &[u8], num_bars: usize) -> Result<Amplitude
 
 /// Decode a single multi-channel PCM frame to mono f32, inline, no heap allocation.
 #[inline(always)]
+#[allow(clippy::needless_range_loop)]
 fn decode_frame_mono(frame: &[u8], bytes_per_sample: usize, channels: usize) -> f32 {
     match bytes_per_sample {
         2 => {
@@ -292,7 +293,7 @@ pub(super) fn find_wav_data_offset(wav: &[u8]) -> Option<usize> {
             return Some(pos + 8); // byte offset right after "data" + 4-byte size
         }
         pos += 8 + chunk_size;
-        if chunk_size % 2 != 0 {
+        if !chunk_size.is_multiple_of(2) {
             pos += 1;
         } // WAV chunks are word-aligned
     }

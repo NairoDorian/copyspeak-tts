@@ -133,7 +133,6 @@ impl Default for HistoryLog {
     }
 }
 
-#[allow(dead_code)]
 impl HistoryLog {
     pub fn new() -> Self {
         let now = Utc::now();
@@ -338,33 +337,12 @@ impl HistoryLog {
         self.get_by_id(entry_id)
     }
 
-    /// Get a mutable history entry by its file path
-    pub fn get_entry_by_file_path_mut(&mut self, file_path: &str) -> Option<&mut HistoryEntry> {
-        let entry_id = self
-            .metadata
-            .file_tracking
-            .file_to_entry
-            .get(file_path)?
-            .clone();
-        self.entries_mut().iter_mut().find(|e| e.id == entry_id)
-    }
-
     /// Get file metadata for a history entry
     pub fn get_file_metadata(&self, entry_id: &str) -> Option<&FileMetadata> {
         self.metadata
             .file_tracking
             .entry_file_metadata
             .get(entry_id)
-    }
-
-    /// Get file path for a history entry
-    pub fn get_file_path(&self, entry_id: &str) -> Option<&String> {
-        self.metadata
-            .file_tracking
-            .file_to_entry
-            .iter()
-            .find(|(_, id)| *id == entry_id)
-            .map(|(path, _)| path)
     }
 
     /// Check if a file path is tracked in history
@@ -476,12 +454,10 @@ impl HistoryLog {
         }
 
         if let Ok(entries) = std::fs::read_dir(&history_dir) {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    if let Some(path) = entry.path().to_str() {
-                        if !self.is_file_tracked(path) && entry.path().is_file() {
-                            orphaned.push(path.to_string());
-                        }
+            for entry in entries.flatten() {
+                if let Some(path) = entry.path().to_str() {
+                    if !self.is_file_tracked(path) && entry.path().is_file() {
+                        orphaned.push(path.to_string());
                     }
                 }
             }
@@ -501,25 +477,6 @@ impl HistoryLog {
         }
 
         missing
-    }
-
-    /// Get file size for a specific entry
-    pub fn get_entry_file_size(&self, entry_id: &str) -> Option<u64> {
-        self.get_file_metadata(entry_id)
-            .map(|metadata| metadata.size_bytes)
-    }
-
-    /// Update file format for a history entry
-    pub fn update_file_format(&mut self, entry_id: &str, format: &str) {
-        if let Some(metadata) = self
-            .metadata
-            .file_tracking
-            .entry_file_metadata
-            .get_mut(entry_id)
-        {
-            metadata.format = Some(format.to_string());
-            self.metadata.file_tracking.last_updated = Utc::now();
-        }
     }
 
     /// Get statistics about current entries
@@ -614,6 +571,7 @@ fn generate_id() -> String {
 /// Add a new entry to the history with batch info and metadata.
 /// If `skip_save` is true, the entry is added in memory but the log is
 /// NOT persisted to disk (caller must save once after all entries).
+#[allow(clippy::too_many_arguments)]
 pub fn add_entry_with_batch(
     history: &Mutex<HistoryLog>,
     text: &str,
@@ -701,7 +659,7 @@ pub fn cleanup_old_entries(
             if initial_count > max_entries {
                 // Sort by timestamp descending (latest first) to safely keep latest
                 let mut entries: Vec<HistoryEntry> = hist.entries().iter().cloned().collect();
-                entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+                entries.sort_by_key(|b| std::cmp::Reverse(b.timestamp));
 
                 // Identify files to remove from the older entries
                 for entry in entries.iter().skip(max_entries) {
@@ -714,7 +672,7 @@ pub fn cleanup_old_entries(
                 entries.truncate(max_entries);
 
                 // Re-sort back to ascending for the circular buffer
-                entries.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+                entries.sort_by_key(|a| a.timestamp);
 
                 let mut new_deque = VecDeque::with_capacity(crate::history::MAX_ENTRIES);
                 for e in entries {
@@ -868,7 +826,7 @@ pub fn save_audio_to_storage(
 
     let dir: std::path::PathBuf = match config.storage_mode {
         crate::config::StorageMode::Temp => {
-            std::env::temp_dir().join("CopySpeak_Generations").into()
+            std::env::temp_dir().join("CopySpeak_Generations")
         }
         crate::config::StorageMode::Persistent => {
             config.persistent_dir.clone().unwrap_or_else(|| {

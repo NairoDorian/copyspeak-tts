@@ -29,6 +29,7 @@ pub enum TtsError {
 
 /// Metadata for a voice option exposed in the settings UI.
 #[derive(Debug, Clone, serde::Serialize)]
+#[allow(dead_code)]
 pub struct Voice {
     pub id: String,
     pub name: String,

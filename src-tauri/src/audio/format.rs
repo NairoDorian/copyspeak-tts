@@ -110,10 +110,10 @@ pub fn convert_audio_format(
 
         match e.kind() {
             std::io::ErrorKind::NotFound => {
-                format!("Audio conversion failed: output file not created by ffmpeg. Check ffmpeg installation.")
+                "Audio conversion failed: output file not created by ffmpeg. Check ffmpeg installation.".to_string()
             }
             std::io::ErrorKind::PermissionDenied => {
-                format!("Permission denied reading converted audio file. Check file system permissions.")
+                "Permission denied reading converted audio file. Check file system permissions.".to_string()
             }
             _ => {
                 format!("Failed to read converted audio file: {}. The conversion may have failed.", e)

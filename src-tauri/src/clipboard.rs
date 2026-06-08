@@ -116,6 +116,7 @@ impl ClipboardState {
         }
 
         // 2. Check for double copy
+        #[allow(clippy::match_like_matches_macro)]
         let should_speak = match (&self.last_text, self.last_copy_time) {
             (Some(prev), Some(time))
                 if prev == new_text

@@ -6,18 +6,15 @@ use super::ValidationError;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum TtsEngine {
     Local,
     OpenAI,
     ElevenLabs,
+    #[default]
     Cartesia,
 }
 
-impl Default for TtsEngine {
-    fn default() -> Self {
-        TtsEngine::Cartesia
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OpenAIConfig {
@@ -38,8 +35,8 @@ impl Default for OpenAIConfig {
 
 impl OpenAIConfig {
     pub fn validate(&self) -> Vec<ValidationError> {
-        let errors = Vec::new();
-        errors
+        
+        Vec::new()
     }
 }
 
@@ -98,8 +95,8 @@ impl Default for ElevenLabsConfig {
 
 impl ElevenLabsConfig {
     pub fn validate(&self) -> Vec<ValidationError> {
-        let errors = Vec::new();
-        errors
+        
+        Vec::new()
     }
 }
 
@@ -128,8 +125,8 @@ impl Default for CartesiaConfig {
 
 impl CartesiaConfig {
     pub fn validate(&self) -> Vec<ValidationError> {
-        let errors = Vec::new();
-        errors
+        
+        Vec::new()
     }
 }
 

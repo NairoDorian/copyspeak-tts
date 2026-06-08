@@ -54,7 +54,7 @@ fn strip_headers(text: &str) -> String {
 
 fn strip_bold_italic(text: &str) -> String {
     let result = text.replace("**", "").replace("__", "");
-    result.replace('*', "").replace('_', "")
+    result.replace(['*', '_'], "")
 }
 
 fn strip_lists(text: &str) -> String {

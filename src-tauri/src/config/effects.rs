@@ -5,17 +5,14 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum EffectId {
+    #[default]
     None,
     WalkieTalkie,
     GameBoy,
 }
 
-impl Default for EffectId {
-    fn default() -> Self {
-        EffectId::None
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EffectsConfig {

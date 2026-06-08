@@ -9,7 +9,9 @@ use super::{ValidationError, GENERATION_COUNTER};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum AudioFormat {
+    #[default]
     Wav,
     Mp3,
     Ogg,
@@ -27,11 +29,6 @@ impl AudioFormat {
     }
 }
 
-impl Default for AudioFormat {
-    fn default() -> Self {
-        AudioFormat::Wav
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -75,16 +72,13 @@ impl Default for OutputConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum StorageMode {
     Temp,
+    #[default]
     Persistent,
 }
 
-impl Default for StorageMode {
-    fn default() -> Self {
-        Self::Persistent
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]

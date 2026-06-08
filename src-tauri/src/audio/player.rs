@@ -74,11 +74,11 @@ impl AudioPlayerInner {
     }
 
     fn is_playing(&self) -> bool {
-        self.sink.as_ref().map_or(false, |s| !s.empty())
+        self.sink.as_ref().is_some_and(|s| !s.empty())
     }
 
     fn is_paused(&self) -> bool {
-        self.sink.as_ref().map_or(false, |s| s.is_paused())
+        self.sink.as_ref().is_some_and(|s| s.is_paused())
     }
 
     fn toggle_pause(&mut self) {

@@ -103,6 +103,7 @@ fn record_telemetry(
 /// Add history entry with synthesis metadata.
 /// If `skip_save` is true, the entry is added to the in-memory log but the
 /// log is NOT persisted to disk (caller must save once after all entries).
+#[allow(clippy::too_many_arguments)]
 fn add_history_with_metadata(
     history: &State<'_, Mutex<HistoryLog>>,
     text: &str,
@@ -178,13 +179,13 @@ async fn emit_audio_fragment(
 /// before the loop advances to the next fragment to preserve emit order.
 fn spawn_fragment_emit(
     app: &AppHandle,
-    wav_bytes: &Vec<u8>,
+    wav_bytes: &[u8],
     index: usize,
     total: usize,
     text: String,
 ) -> tokio::task::JoinHandle<()> {
     use base64::{engine::general_purpose, Engine as _};
-    let wav = wav_bytes.clone();
+    let wav = wav_bytes.to_vec();
     let app = app.clone();
     tokio::task::spawn_blocking(move || {
         let encoded = general_purpose::STANDARD.encode(&wav);
@@ -304,7 +305,7 @@ pub async fn speak_now(
 
     // Get telemetry estimate for progress display
     let (estimated_ms, confidence) =
-        telemetry::get_estimate(&telemetry_state, &engine_str_for_cache, &voice, text.len());
+        telemetry::get_estimate(&telemetry_state, engine_str_for_cache, &voice, text.len());
 
     // Emit initial synthesis progress
     hud::emit_synthesis_progress(
@@ -368,7 +369,7 @@ pub async fn speak_now(
     // Record telemetry
     record_telemetry(
         &telemetry_state,
-        &engine_str(&active_backend),
+        engine_str(&active_backend),
         &voice,
         text.len(),
         synthesis_ms,
@@ -412,6 +413,7 @@ pub async fn speak_now(
 
 /// Synthesize paginated text with progress updates
 #[inline(never)]
+#[allow(clippy::too_many_arguments)]
 async fn synthesize_paginated(
     app: &AppHandle,
     backend_arc: Arc<Box<dyn TtsBackend>>,
@@ -441,7 +443,7 @@ async fn synthesize_paginated(
     let char_counts: Vec<usize> = fragments.iter().map(|f| f.text.len()).collect();
     let (total_estimate, avg_confidence, _) = telemetry::get_estimate_paginated(
         telemetry_state,
-        &engine_str(active_backend),
+        engine_str(active_backend),
         voice,
         &char_counts,
     );
@@ -494,6 +496,7 @@ async fn synthesize_paginated(
 }
 
 /// Handle file output mode
+#[allow(clippy::too_many_arguments)]
 fn handle_file_output(
     app: &AppHandle,
     _config: &State<'_, Mutex<AppConfig>>,
@@ -544,7 +547,7 @@ fn handle_file_output(
     add_history_with_metadata(
         history,
         text,
-        &engine_str(active_backend),
+        engine_str(active_backend),
         voice,
         audio_duration_ms,
         Some(output_path.to_string_lossy().into_owned()),
@@ -559,6 +562,7 @@ fn handle_file_output(
 }
 
 /// Handle normal playback output
+#[allow(clippy::too_many_arguments)]
 async fn handle_playback_output(
     app: &AppHandle,
     config: &State<'_, Mutex<AppConfig>>,
@@ -589,7 +593,7 @@ async fn handle_playback_output(
     add_history_with_metadata(
         history,
         text,
-        &engine_str(active_backend),
+        engine_str(active_backend),
         voice,
         envelope.duration_ms,
         history_path,
@@ -707,7 +711,7 @@ pub async fn speak_queued(
     let char_counts: Vec<usize> = fragments.iter().map(|f| f.text.len()).collect();
     let (total_estimate, avg_confidence, _) = telemetry::get_estimate_paginated(
         &telemetry_state,
-        &engine_str(&active_backend),
+        engine_str(&active_backend),
         &voice,
         &char_counts,
     );
@@ -787,7 +791,7 @@ pub async fn speak_queued(
             &config,
             &history,
             &telemetry_state,
-            &engine_str_val,
+            engine_str_val,
             &engine_id_val,
             &tts_config,
             &active_backend,
@@ -807,7 +811,7 @@ pub async fn speak_queued(
             &config,
             &history,
             &telemetry_state,
-            &engine_str_val,
+            engine_str_val,
             &engine_id_val,
             &tts_config,
             &active_backend,
@@ -845,6 +849,7 @@ pub async fn speak_queued(
 // ── Queued Synthesis Helpers ─────────────────────────────────────────────────
 
 /// Sequential synthesis for CLI backends or single fragments.
+#[allow(clippy::too_many_arguments)]
 async fn synthesize_queued_sequential(
     app: &AppHandle,
     backend_arc: Arc<Box<dyn TtsBackend>>,
@@ -962,6 +967,7 @@ async fn synthesize_queued_sequential(
 /// Parallel synthesis for cloud backends with multiple fragments.
 /// Processes all fragments with a concurrency cap, collecting results sorted
 /// by index, then emits in order for correct sequential playback.
+#[allow(clippy::too_many_arguments)]
 async fn synthesize_queued_parallel(
     app: &AppHandle,
     backend_arc: Arc<Box<dyn TtsBackend>>,
@@ -1130,7 +1136,7 @@ pub async fn speak_history_entry(
 
     // Get telemetry estimate
     let (estimated_ms, confidence) =
-        telemetry::get_estimate(&telemetry_state, &engine_str_val, &voice, text.len());
+        telemetry::get_estimate(&telemetry_state, engine_str_val, &voice, text.len());
 
     // Emit progress event
     hud::emit_synthesis_progress(
@@ -1159,7 +1165,7 @@ pub async fn speak_history_entry(
     // Record telemetry
     record_telemetry(
         &telemetry_state,
-        &engine_str_val,
+        engine_str_val,
         &voice,
         text.len(),
         synthesis_ms,
@@ -1175,7 +1181,7 @@ pub async fn speak_history_entry(
     add_history_with_metadata(
         &history,
         &text,
-        &engine_str_val,
+        engine_str_val,
         &voice,
         envelope.duration_ms,
         history_path,

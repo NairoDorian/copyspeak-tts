@@ -312,10 +312,7 @@ pub fn list_history(
         .as_ref()
         .and_then(|o| o.sort_order.as_deref())
         .unwrap_or("newest");
-    match sort_order {
-        "oldest" => entries.reverse(),
-        _ => {}
-    }
+    if sort_order == "oldest" { entries.reverse() }
 
     // Apply pagination
     let limit = options.as_ref().and_then(|o| o.limit).unwrap_or(100);

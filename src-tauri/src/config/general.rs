@@ -4,30 +4,24 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum CloseBehavior {
+    #[default]
     MinimizeToTray,
     Exit,
 }
 
-impl Default for CloseBehavior {
-    fn default() -> Self {
-        CloseBehavior::MinimizeToTray
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum AppearanceMode {
+    #[default]
     System,
     Light,
     Dark,
 }
 
-impl Default for AppearanceMode {
-    fn default() -> Self {
-        AppearanceMode::System
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeneralConfig {
