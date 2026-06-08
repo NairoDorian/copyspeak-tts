@@ -141,6 +141,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Type annotations tightened** — `&PathBuf` → `&Path` in `write_to_temp()`, `&Vec<u8>` → `&[u8]` in `spawn_fragment_emit()`, `std::u32::MAX` → `u32::MAX` (clippy `ptr_arg`, `legacy_numeric_constants`).
 - **Lint scope reduced** — `#[allow(clippy::too_many_arguments)]` moved from module-level to individual function annotations on 8 heavy-parameter functions; `#[allow(clippy::match_like_matches_macro)]` and `#[allow(clippy::needless_range_loop)]` scoped to single functions in `clipboard.rs` and `audio/wav.rs` respectively.
 
+### Fixed
+
+- **On-demand Piper server restart missing warmup** — `synthesize_via_server()` now runs a hidden warmup synthesis after starting a new server on-demand (when the loaded voice/model doesn't match the requested one). Previously, only `prewarm_piper_server()` (config-triggered) ran the warmup; voice-mismatch restarts inside the synthesis path skipped it, making the first real request pay the 1–4s ONNX JIT/GPU init penalty on top of the server start time.
+- **`speak_history_entry` used history entry's voice instead of current config** — The re-speak button now uses `voice_for_backend(current_config)` rather than the voice stored in the history entry, so it re-synthesizes text with the currently selected voice, backend, and speed settings as intended.
+- **Piper warmup text reduced to `"Hello"`** — Warmup synthesis in both `prewarm_piper_server()` and the new on-demand path now uses `"Hello"` (5 chars) instead of a long sentence, reducing warmup time from 1–3s to 0.2–1s.
+
 ## [0.1.5] - 2026-05-20
 
 ### Added

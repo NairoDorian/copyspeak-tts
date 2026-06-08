@@ -1109,13 +1109,13 @@ pub async fn speak_history_entry(
         log::debug!("[IPC] speak_history_entry called (id: {})", entry_id);
     }
 
-    // Get text and voice from history
-    let (text, original_voice) = {
+    // Get text from history
+    let text = {
         let hist = history.lock().unwrap();
         let entry = hist
             .get_by_id(&entry_id)
             .ok_or_else(|| format!("History entry not found: {}", entry_id))?;
-        (entry.text.clone(), entry.voice.clone())
+        entry.text.clone()
     };
 
     if text.trim().is_empty() {
@@ -1128,7 +1128,7 @@ pub async fn speak_history_entry(
     };
 
     let backend: Box<dyn TtsBackend> = create_backend(&active_backend, &tts_config);
-    let voice = original_voice;
+    let voice = voice_for_backend(&active_backend, &tts_config);
     let engine_str_val = engine_str(&active_backend);
     let engine_id = engine_identifier(&active_backend, &tts_config);
     let voice_name = voice_display_name(&active_backend, &tts_config, &voice);

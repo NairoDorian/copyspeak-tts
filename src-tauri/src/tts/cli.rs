@@ -260,7 +260,7 @@ pub fn prewarm_piper_server(command: String, voice: String, data_dir: String, cu
         // A longer text warms more model layers, making the first real synthesis fast.
         let warmup_client = get_piper_client().clone();
         let warmup_url = format!("http://127.0.0.1:{}/", port);
-        let warmup_body = serde_json::json!({ "text": "The quick brown fox jumps over the lazy dog. This warms the model layers for faster synthesis.", "length_scale": 1.0 });
+        let warmup_body = serde_json::json!({ "text": "Hello", "length_scale": 1.0 });
         let warmup_start = std::time::Instant::now();
         match warmup_client.post(&warmup_url).json(&warmup_body).send() {
             Ok(resp) => {
@@ -774,6 +774,29 @@ impl CliTtsBackend {
                     cuda,
                     client: client.clone(),
                 });
+
+                // Warm-up synthesis — forces ONNX JIT / GPU kernel init so the
+                // first real synthesis (from this or subsequent calls) is fast.
+                // Without this, the user's first request pays the 1-4s cold-start
+                // penalty because `prewarm_piper_server` only warms after
+                // config-triggered restarts, not on-demand voice-mismatch restarts.
+                let warmup_url = format!("http://127.0.0.1:{}/", new_port);
+                let warmup_body = serde_json::json!({
+                    "text": "Hello",
+                    "length_scale": 1.0,
+                });
+                let t_warmup = std::time::Instant::now();
+                match client.post(&warmup_url).json(&warmup_body).send() {
+                    Ok(_) => log::debug!(
+                        "[Piper] On-demand warmup completed in {:.1}s",
+                        t_warmup.elapsed().as_secs_f64()
+                    ),
+                    Err(e) => log::warn!(
+                        "[Piper] On-demand warmup failed: {}. First real synthesis will be slower.",
+                        e
+                    ),
+                }
+
                 (new_port, client)
             } else {
                 let state = server
