@@ -2,21 +2,16 @@
 // Handles playback with interrupt/queue modes via a dedicated audio thread.
 
 use crate::config::RetriggerMode;
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
-use std::io::{BufReader, Cursor};
-use std::process::Child;
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
+use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
 use std::thread;
 
-use super::stream::WavStreamSource;
-
 /// Commands sent to the audio thread
-#[allow(dead_code)]
 pub(super) enum AudioCommand {
     Play(Vec<u8>),
-    PlayStreaming(Child),
     Stop,
     Pause,
     Resume,
@@ -163,83 +158,6 @@ impl AudioPlayerInner {
         Ok(())
     }
 
-    fn play_streaming(&mut self, mut child: Child) -> Result<(), String> {
-        log::debug!("play_streaming() called, mode: {:?}", self.mode);
-
-        match self.mode {
-            RetriggerMode::Interrupt => {
-                log::debug!("Interrupt mode: stopping current playback");
-                self.stop();
-            }
-            RetriggerMode::Queue => {
-                if let Some(ref sink) = self.sink {
-                    if !sink.empty() {
-                        log::debug!("Queue mode: appending streaming audio to existing playback");
-                        let stdout = child.stdout.take().ok_or_else(|| {
-                            log::error!("TTS process has no stdout stream available");
-                            "No audio stream from TTS process. The TTS engine may have failed."
-                                .to_string()
-                        })?;
-                        let reader = BufReader::new(stdout);
-                        let source = WavStreamSource::new(reader).map_err(|e| {
-                            log::error!("Failed to decode streaming audio: {}", e);
-                            format!("Failed to decode streaming audio: {}. The TTS output may be corrupted.", e)
-                        })?;
-                        sink.set_volume(self.volume as f32 / 100.0);
-                        sink.append(source.buffered());
-                        return Ok(());
-                    }
-                }
-            }
-        }
-
-        log::debug!("Creating new stream and sink for streaming playback");
-        let stdout = child.stdout.take().ok_or_else(|| {
-            log::error!("TTS process has no stdout stream available");
-            "No audio stream from TTS process. The TTS engine may have failed.".to_string()
-        })?;
-        let reader = BufReader::new(stdout);
-
-        let source = WavStreamSource::new(reader).map_err(|e| {
-            log::error!("Failed to decode streaming audio: {}", e);
-            format!(
-                "Failed to decode streaming audio: {}. The TTS output may be corrupted.",
-                e
-            )
-        })?;
-
-        let (stream, handle) = OutputStream::try_default().map_err(|e| {
-            log::error!("Failed to find default audio output device: {}", e);
-            format!("No audio output device found: {}", e)
-        })?;
-
-        let sink = Sink::try_new(&handle).map_err(|e| {
-            log::error!("Failed to create audio sink: {}", e);
-            format!(
-                "Failed to initialize audio playback: {}. Check your audio device settings.",
-                e
-            )
-        })?;
-
-        sink.set_volume(self.volume as f32 / 100.0);
-        sink.append(source.buffered());
-
-        self.sink = Some(sink);
-        self._stream = Some(stream);
-        self.stream_handle = Some(handle);
-        self.playback_start = Some(std::time::Instant::now());
-        self.paused_duration = std::time::Duration::ZERO;
-        self.pause_start = None;
-        self.current_position = std::time::Duration::ZERO;
-        log::info!("Streaming audio playback started");
-
-        std::thread::spawn(move || {
-            let _ = child.wait();
-        });
-
-        Ok(())
-    }
-
     fn stop(&mut self) {
         if let Some(sink) = self.sink.take() {
             log::info!("Audio playback stopped");
@@ -361,7 +279,6 @@ pub struct AudioPlayer {
     tx: Sender<AudioCommand>,
     is_playing: Arc<AtomicBool>,
     is_paused: Arc<AtomicBool>,
-    #[allow(dead_code)]
     playback_finished: Arc<AtomicBool>,
     currently_playing_entry_id: Arc<std::sync::Mutex<Option<String>>>,
 }
@@ -408,16 +325,11 @@ impl AudioPlayer {
                 }
                 prev_playing = now_playing;
 
-                match rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                match rx.recv_timeout(std::time::Duration::from_millis(200)) {
                     Ok(cmd) => match cmd {
                         AudioCommand::Play(wav_bytes) => {
                             if let Err(e) = player.play(wav_bytes) {
                                 log::error!("Audio play error: {}", e);
-                            }
-                        }
-                        AudioCommand::PlayStreaming(child) => {
-                            if let Err(e) = player.play_streaming(child) {
-                                log::error!("Audio streaming play error: {}", e);
                             }
                         }
                         AudioCommand::Stop => {
@@ -476,7 +388,6 @@ impl AudioPlayer {
     }
 
     /// Play WAV audio bytes. Behavior on re-trigger depends on current mode.
-    #[allow(dead_code)]
     pub fn play(&mut self, wav_bytes: Vec<u8>) -> Result<(), String> {
         self.tx
             .send(AudioCommand::Play(wav_bytes))
@@ -488,12 +399,10 @@ impl AudioPlayer {
         let _ = self.tx.send(AudioCommand::Stop);
     }
 
-    #[allow(dead_code)]
     pub fn pause(&mut self) {
         let _ = self.tx.send(AudioCommand::Pause);
     }
 
-    #[allow(dead_code)]
     pub fn resume(&mut self) {
         let _ = self.tx.send(AudioCommand::Resume);
     }
@@ -510,12 +419,10 @@ impl AudioPlayer {
         let _ = self.tx.send(AudioCommand::SeekRelative(-(seconds as i32)));
     }
 
-    #[allow(dead_code)]
     pub fn is_playing(&self) -> bool {
         self.is_playing.load(Ordering::Relaxed)
     }
 
-    #[allow(dead_code)]
     pub fn is_paused(&self) -> bool {
         self.is_paused.load(Ordering::Relaxed)
     }
@@ -529,7 +436,6 @@ impl AudioPlayer {
 
     /// Check and clear the playback finished flag.
     /// Returns true if playback finished since the last call, false otherwise.
-    #[allow(dead_code)]
     pub fn take_playback_finished(&self) -> bool {
         self.playback_finished.swap(false, Ordering::Relaxed)
     }

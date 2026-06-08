@@ -128,6 +128,7 @@ async fn emit_audio_ready(app: &AppHandle, wav_bytes: &[u8]) {
 
 /// Emit audio-fragment-ready event for streaming playback.
 /// Encoding runs on blocking thread pool to avoid stalling the async worker.
+#[inline]
 async fn emit_audio_fragment(
     app: &AppHandle,
     wav_bytes: &[u8],
@@ -153,6 +154,39 @@ async fn emit_audio_fragment(
     ) {
         log::warn!("Failed to emit audio-fragment-ready: {}", e);
     }
+}
+
+/// Spawn fragment emit in a background task so synthesis of the next fragment
+/// can overlap with base64 encoding. Returns a JoinHandle that must be polled
+/// before the loop advances to the next fragment to preserve emit order.
+fn spawn_fragment_emit(
+    app: &AppHandle,
+    wav_bytes: &Vec<u8>,
+    index: usize,
+    total: usize,
+    text: String,
+) -> tokio::task::JoinHandle<()> {
+    use base64::{engine::general_purpose, Engine as _};
+    let wav = wav_bytes.clone();
+    let app = app.clone();
+    tokio::task::spawn(async move {
+        let encoded = tokio::task::spawn_blocking(move || general_purpose::STANDARD.encode(&wav))
+            .await
+            .unwrap_or_default();
+        let is_final = index == total - 1;
+        if let Err(e) = app.emit(
+            "audio-fragment-ready",
+            AudioFragmentEvent {
+                audio_base64: encoded,
+                fragment_index: index,
+                fragment_total: total,
+                is_final,
+                text,
+            },
+        ) {
+            log::warn!("Failed to emit audio-fragment-ready: {}", e);
+        }
+    })
 }
 
 /// Save audio to history storage and return path
@@ -323,10 +357,10 @@ pub async fn speak_now(
         synthesis_ms,
     );
 
-    if crate::logging::is_debug_mode() {
-        log::debug!("[TTS] Synthesis completed in {:?}", synthesis_duration);
-        log::debug!("[TTS] Audio size: {} bytes", wav_bytes.len());
-    }
+    log::info!(
+        "[TTS] Synthesis completed in {}ms, {} bytes",
+        synthesis_ms, wav_bytes.len()
+    );
 
     // Handle file output mode
     if output_config.enabled && !output_config.directory.is_empty() {
@@ -516,14 +550,20 @@ async fn handle_playback_output(
     backend_arc: Arc<Box<dyn TtsBackend>>,
     synthesis_ms: u64,
 ) -> Result<(), String> {
+    let t_post = std::time::Instant::now();
+
+    let t_env = std::time::Instant::now();
     let envelope = extract_envelope_or_default(wav_bytes);
+    let env_ms = t_env.elapsed().as_millis() as u64;
 
     let engine_id = engine_identifier(active_backend, tts_config);
     let voice_name = voice_display_name(active_backend, tts_config, voice);
     let audio_ext = backend_arc.file_extension().to_string();
 
+    let t_hist = std::time::Instant::now();
     let history_path =
         save_to_history_storage(config, wav_bytes, &engine_id, &voice_name, &audio_ext);
+    let hist_ms = t_hist.elapsed().as_millis() as u64;
 
     add_history_with_metadata(
         history,
@@ -545,7 +585,19 @@ async fn handle_playback_output(
     hud::show_hud(app, envelope, Some(text.to_string()));
 
     // Emit audio to frontend for browser-native playback
+    let t_emit = std::time::Instant::now();
     emit_audio_ready(app, wav_bytes).await;
+    let emit_ms = t_emit.elapsed().as_millis() as u64;
+
+    let post_ms = t_post.elapsed().as_millis() as u64;
+    log::info!(
+        "[TTS] Pipeline — synth:{synth_ms}ms env:{env_ms}ms hist:{hist_ms}ms emit:{emit_ms}ms total_post:{post_ms}ms",
+        synth_ms = synthesis_ms,
+        env_ms = env_ms,
+        hist_ms = hist_ms,
+        emit_ms = emit_ms,
+        post_ms = post_ms
+    );
 
     Ok(())
 }
@@ -788,6 +840,8 @@ async fn synthesize_queued_sequential(
     avg_confidence: f32,
     total_chars: usize,
 ) -> Result<(), String> {
+    let mut pending_emit: Option<tokio::task::JoinHandle<()>> = None;
+
     for (index, fragment) in fragments.iter().enumerate() {
         {
             let q = queue.lock().unwrap();
@@ -796,11 +850,7 @@ async fn synthesize_queued_sequential(
                 q.clear();
                 let _ = app.emit(
                     "pagination:stopped",
-                    PaginationEvent {
-                        total,
-                        current_index: index,
-                        is_paginated: total > 1,
-                    },
+                    PaginationEvent { total, current_index: index, is_paginated: total > 1 },
                 );
                 return Ok(());
             }
@@ -810,27 +860,12 @@ async fn synthesize_queued_sequential(
 
         let _ = app.emit(
             "pagination:fragment-started",
-            PaginationEvent {
-                total,
-                current_index: index,
-                is_paginated: total > 1,
-            },
+            PaginationEvent { total, current_index: index, is_paginated: total > 1 },
         );
 
         let elapsed = synthesis_start.elapsed().as_millis() as u64;
         let processed_chars: usize = fragments.iter().take(index).map(|f| f.text.len()).sum();
-        hud::emit_synthesis_progress(
-            app,
-            total_estimate,
-            elapsed,
-            index,
-            total,
-            true,
-            avg_confidence,
-            truncate_preview(&fragment.text, 50),
-            total_chars,
-            processed_chars,
-        );
+        hud::emit_synthesis_progress(app, total_estimate, elapsed, index, total, true, avg_confidence, truncate_preview(&fragment.text, 50), total_chars, processed_chars);
 
         {
             let q = queue.lock().unwrap();
@@ -842,13 +877,7 @@ async fn synthesize_queued_sequential(
             synthesize_async(backend_arc.clone(), fragment.text.clone(), voice.to_string()).await?;
         let fragment_duration = fragment_start.elapsed();
 
-        record_telemetry(
-            telemetry_state,
-            engine_str_val,
-            voice,
-            fragment.text.len(),
-            fragment_duration.as_millis() as u64,
-        );
+        record_telemetry(telemetry_state, engine_str_val, voice, fragment.text.len(), fragment_duration.as_millis() as u64);
 
         {
             let q = queue.lock().unwrap();
@@ -872,36 +901,28 @@ async fn synthesize_queued_sequential(
             metadata.insert("fragment_total".to_string(), serde_json::json!(total));
         }
 
-        add_history_with_metadata(
-            history,
-            &fragment.text,
-            engine_str_val,
-            voice,
-            envelope.duration_ms,
-            history_path,
-            batch_id.clone(),
-            fragment_duration.as_millis() as u64,
-            Some(metadata),
-        );
+        add_history_with_metadata(history, &fragment.text, engine_str_val, voice, envelope.duration_ms, history_path, batch_id.clone(), fragment_duration.as_millis() as u64, Some(metadata));
 
-        emit_audio_fragment(app, &wav_bytes, index, total, fragment.text.clone()).await;
+        // Await previous fragment's emit to preserve order, then spawn current emit.
+        // This overlaps current synthesis with previous emit's base64 encoding.
+        if let Some(handle) = pending_emit.take() {
+            let _ = handle.await;
+        }
+        pending_emit = Some(spawn_fragment_emit(app, &wav_bytes, index, total, fragment.text.clone()));
 
         let _ = app.emit(
             "pagination:fragment-ready",
-            PaginationEvent {
-                total,
-                current_index: index,
-                is_paginated: total > 1,
-            },
+            PaginationEvent { total, current_index: index, is_paginated: total > 1 },
         );
         let _ = app.emit(
             "pagination:fragment-complete",
-            PaginationEvent {
-                total,
-                current_index: index,
-                is_paginated: total > 1,
-            },
+            PaginationEvent { total, current_index: index, is_paginated: total > 1 },
         );
+    }
+
+    // Await final emit
+    if let Some(handle) = pending_emit.take() {
+        let _ = handle.await;
     }
 
     let _ = app.emit("history-updated", ());

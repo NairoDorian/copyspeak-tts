@@ -55,7 +55,6 @@ pub struct AudioFragmentEvent {
 
 /// Event emitted during synthesis to show progress with ETA.
 #[derive(Debug, Clone, serde::Serialize)]
-#[allow(dead_code)]
 pub struct SynthesisProgressEvent {
     /// Estimated total duration in milliseconds (if available)
     pub estimated_total_ms: Option<u64>,

@@ -1,6 +1,5 @@
 // Fragment queue management for sequential TTS processing.
 // Handles queueing of text fragments and sequential playback with auto-advancement.
-#![allow(dead_code)]
 
 use crate::pagination::TextFragment;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

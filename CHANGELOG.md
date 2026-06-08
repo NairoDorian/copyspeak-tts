@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Parallel cloud fragment synthesis** — For cloud backends (OpenAI, ElevenLabs, Cartesia) with multiple paginated fragments, `speak_queued` now synthesizes up to 3 fragments concurrently via `tokio::task::JoinSet`, then emits results in index order. CLI backends continue to use the existing sequential loop.
 - **Pre-decode next fragment during playback** — When a fragment starts playing, the `PlaybackStore` asynchronously base64-decodes and `decodeAudioData()` the next queued fragment in the background, so when the current fragment ends the next one is ready to play instantly with zero decode gap.
 - **Piper server pre-warm at app startup** — When the active backend is Local with the `piper` preset, `prewarm_piper_server()` spawns the HTTP server in a background thread at app launch, loading the voice model into RAM before the user ever triggers synthesis.
+- **Piper warm-up synthesis** — After the server reports ready, `prewarm_piper_server()` sends a hidden synthesis to force ONNX Runtime JIT compilation and GPU kernel init, eliminating a ~1.6s cold-start penalty on the first real request.
+- **Piper server auto-restart on config change** — `restart_piper_server()` kills and respawns the Piper server when voice or CUDA settings change, with a `PIPER_WARMING` atomic guard preventing duplicate servers.
+- **Piper server status endpoint** — `get_piper_server_status()` returns `PiperServerStatus` (running, model, port, cuda, ready) for the control server `/piper-status` health check.
+- **Piper performance test script** — `test-piper-perf.ps1` automates synthesis timing measurements via the control server API.
 
 ### Changed
 
@@ -43,12 +47,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`AudioContext` pre-warmed at startup** — `PlaybackStore.setupListeners()` now creates the `AudioContext` and calls `resume()` immediately at app startup instead of lazily on first playback, avoiding a 50–200ms cold-start delay.
 - **Clipboard config read** — Combined two separate `AppConfig` mutex locks (for `trigger_window_ms`/`max_text_length` and for `sanitization_config`) into a single lock acquisition in `clipboard.rs:on_change`, reducing mutex contention.
 - **Cleanup pass conditional** — `cleanup_artifacts()` in the sanitization pipeline now runs a single pass and only re-runs if the text actually changed, instead of unconditionally running twice.
+- **Piper server consolidated single-lock pattern** — `synthesize_via_server()` acquires the `PIPER_SERVER` mutex in one cohesive critical section (check → start → extract port), eliminating the triple lock/unlock cycle and race windows for duplicate server processes.
+- **Piper HTTP client simplified** — Replaced custom `build_keepalive_client()` builder with bare `reqwest::blocking::Client::new()`, which already enables connection pooling by default without unnecessary TCP keepalive syscalls on localhost.
+- **Piper synthesis timing instrumentation** — Every synthesis call logs `[Piper] Synthesis — total:Xms (req:Yms read:Zms) size:N B chars:N voice:X cuda:bool` for visibility into HTTP vs data transfer time.
+- **TTS pipeline timing breakdown** — `handle_playback_output()` logs `[TTS] Pipeline — synth:Xms env:Xms hist:Xms emit:Xms total_post:Xms` showing exactly where post-synthesis time goes.
+- **Synthesis timing always visible** — Changed synthesis completion from `log::debug!` (debug-mode only) to `log::info!` so millisecond timings are always in console output.
+- **Audio thread poll interval** — Increased the audio playback monitor's channel receive timeout from 50ms to 200ms, reducing idle CPU wake-ups by 4×.
+- **Piper log prefix standardized** — All Piper-related log messages use `[Piper]` prefix for consistency across prewarm, synthesis, restart, and health-check paths.
+- **`SynthesisGuard` RAII semantics** — `SynthesisGuard` now resets `is_synthesizing` via `Drop` impl, preventing stale synthesis-state on early returns or panics.
 
 ### Fixed
 
+- **Piper prewarm/synthesis race condition** — Added `PIPER_WARMING` atomic flag with `ClearWarming` RAII drop guard. `synthesize_via_server()` polls this flag before starting a new server, eliminating a race where `restart_piper_server`'s background prewarm thread and a foreground synthesis call would start two separate server processes simultaneously.
 - **System Tray and Configuration Sync** — Fixed the listening state toggle sync by making `set_listening` IPC command update and persist the `AppConfig` to disk and emit the `config-changed` event.
 - **Listening State Initialization** — Initialized the tray listening menu item label dynamically on startup using the user's persistent config instead of hardcoding `"● Listening"`.
 - **Chrono timestamp allocation** — Moved `chrono::Local::now().format(...)` inside the `is_debug_mode()` guard in `clipboard.rs`, avoiding a heap allocation on every clipboard change in release builds.
+- **Pagination Configuration Bypass** — Fixed `synthesize_paginated` to respect the user's settings by passing `pagination_config` from active configuration instead of hardcoding `PaginationConfig::default()`.
+- **Config Validation Unit Tests** — Explicitly set `active_backend = TtsEngine::Local` in local validation tests in `tests.rs` to prevent failure when the default project engine is configured to a non-local engine.
+- **CLI TTS Engine Health Check** — Fixed the pre-existing health check to dynamically find and use any downloaded local `.onnx` voice in the user's voice folder, resolving failure errors complaining about a missing `"Rosie"` voice.
+- **Clippy and Panic Fixes in CLI TTS backend** — Resolved option unwrap panic vector in Piper server port logic and simplified file extension checks using `is_some_and`.
 
 ### Performance
 
@@ -57,11 +74,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Reduced `ArrayBuffer` copies** — Removed the redundant `arrayBuffer.slice(0)` copy in `handleAudioReady`; `decodeAudioData` now reads directly from the original buffer and `_originalBytes` is set once (not twice).
 - **Analyser `Uint8Array` reuse** — `AudioAnalyser.start()` now allocates the frequency data `Uint8Array` once at `setup()` and reuses it every frame in the rAF loop instead of calling `new Uint8Array(...)` 60 times per second.
 - **OpenAI header precomputation** — `format!("Bearer {}", api_key)` is now computed once in `new()` and stored as `auth_header: String`, avoiding a per-request allocation.
-- **Tauri Plugin Registration** — Removed a duplicate registration of `tauri-plugin-global-shortcut` builder in `main.rs`.
-- **Pagination Configuration Bypass** — Fixed `synthesize_paginated` to respect the user's settings by passing `pagination_config` from active configuration instead of hardcoding `PaginationConfig::default()`.
-- **Config Validation Unit Tests** — Explicitly set `active_backend = TtsEngine::Local` in local validation tests in `tests.rs` to prevent failure when the default project engine is configured to a non-local engine.
-- **CLI TTS Engine Health Check** — Fixed the pre-existing health check to dynamically find and use any downloaded local `.onnx` voice in the user's voice folder, resolving failure errors complaining about a missing `"Rosie"` voice.
-- **Clippy and Panic Fixes in CLI TTS backend** — Resolved option unwrap panic vector in Piper server port logic and simplified file extension checks using `is_some_and`.
+- **Tauri Plugin Registration dedup** — Removed a duplicate registration of `tauri-plugin-global-shortcut` builder in `main.rs`.
+- **WAV envelope extraction: streaming RMS** — `extract_envelope()` now computes RMS in a single pass over raw PCM data without allocating an intermediate `Vec<f32>`. For short audio (<0.5s), processes every frame; for longer audio, decimates to at most `num_bars × 256` samples per bar. Eliminates ~880KB allocation for typical TTS outputs.
+- **PCM frame decoder inlined** — `decode_frame_mono()` marked `#[inline(always)]` with per-bit-depth fast paths, eliminating function call overhead in the hot envelope extraction loop.
+- **Pagination: no `Vec<char>` allocation** — `paginate_text()`, `detect_sentence_boundaries()`, and `force_split()` now operate on `&str` byte offsets via `char_indices()` instead of materializing the entire text as `Vec<char>`, saving ~400KB for 100k-char inputs.
+- **Sequential fragment encoding pipelined** — `synthesize_queued_sequential()` spawns fragment N's base64 encoding in a background `tokio::task` while synthesizing fragment N+1, overlapping CPU-bound encoding with I/O-bound synthesis on the blocking thread pool.
+- **Removed dead `WavStreamSource`** — Deleted `src-tauri/src/audio/stream.rs` (254 lines), `AudioCommand::PlayStreaming` variant, and `play_streaming()` method — all dead code from a pre-HTTP stdout-streaming approach.
+- **Removed dead `read_pcm_samples`/`compute_rms`** — Deleted two functions replaced by the streaming `extract_envelope` + inline `decode_frame_mono`.
+- **Cargo release profile** — Added `opt-level = 3`, `lto = true`, `codegen-units = 1`, and `strip = true` to `[profile.release]` in `Cargo.toml`.
+- **Cleaned `#[allow(dead_code)]` annotations** — Removed file-level `#![allow(dead_code)]` from `fragment_queue.rs` and unnecessary annotations from `TtsError`, `Voice`, `TtsBackend` trait methods, `SynthesisProgressEvent`, and `AudioPlayer` fields/methods.
 
 ## [0.1.5] - 2026-05-20
 

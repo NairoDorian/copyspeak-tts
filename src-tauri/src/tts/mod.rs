@@ -10,7 +10,6 @@ pub mod openai;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-#[allow(dead_code)]
 pub enum TtsError {
     #[error("TTS command failed: {0}")]
     CommandFailed(String),
@@ -30,7 +29,6 @@ pub enum TtsError {
 
 /// Metadata for a voice option exposed in the settings UI.
 #[derive(Debug, Clone, serde::Serialize)]
-#[allow(dead_code)]
 pub struct Voice {
     pub id: String,
     pub name: String,
@@ -42,7 +40,6 @@ pub struct Voice {
 /// Kept intentionally small — synthesize text, get audio bytes.
 pub trait TtsBackend: Send + Sync {
     /// Human-readable name for settings UI display.
-    #[allow(dead_code)]
     fn name(&self) -> &str;
 
     /// Synthesize text into WAV audio bytes.
@@ -60,7 +57,6 @@ pub trait TtsBackend: Send + Sync {
 
     /// Resolve voice ID to human-readable name for display and filenames.
     /// Returns lowercase, filesystem-safe name.
-    #[allow(dead_code)]
     fn voice_display_name(&self, voice_id: &str) -> String {
         voice_id.to_lowercase()
     }
