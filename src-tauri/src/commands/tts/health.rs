@@ -51,17 +51,20 @@ pub fn check_command_exists(command: String) -> Result<CommandExistsResult, Stri
     }
 }
 
+/// Async + spawn_blocking: local-engine health checks can spawn a full CLI
+/// test synthesis (seconds) — that must never run on the main thread.
 #[tauri::command]
-pub fn test_tts_engine(config: State<'_, Mutex<AppConfig>>) -> Result<TtsHealthResult, String> {
+pub async fn test_tts_engine(config: State<'_, Mutex<AppConfig>>) -> Result<TtsHealthResult, String> {
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] test_tts_engine called");
     }
 
     let (active_backend, tts_config) = {
-        let cfg = config.lock().unwrap();
+        let cfg = crate::lock_or_recover!(config);
         (cfg.tts.active_backend.clone(), cfg.tts.clone())
     };
 
+    tokio::task::spawn_blocking(move || {
     let backend: Box<dyn crate::tts::TtsBackend> = create_backend(&active_backend, &tts_config);
 
     let backend_name = match active_backend {
@@ -158,4 +161,7 @@ pub fn test_tts_engine(config: State<'_, Mutex<AppConfig>>) -> Result<TtsHealthR
             })
         }
     }
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }

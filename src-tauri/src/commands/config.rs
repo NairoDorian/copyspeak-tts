@@ -30,15 +30,15 @@ pub fn reset_config(
     }
 
     // Update in-memory state
-    let mut cfg = config.lock().unwrap();
+    let mut cfg = crate::lock_or_recover!(config);
     *cfg = default_config.clone();
     drop(cfg);
 
     // Apply runtime changes
     // Update audio settings
     {
-        let cfg = config.lock().unwrap();
-        let mut p = player.lock().unwrap();
+        let cfg = crate::lock_or_recover!(config);
+        let mut p = crate::lock_or_recover!(player);
         p.set_mode(cfg.playback.on_retrigger.clone());
         p.set_volume(cfg.playback.volume);
     }
@@ -62,7 +62,7 @@ pub fn get_config(config: State<'_, Mutex<AppConfig>>) -> AppConfig {
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] get_config called");
     }
-    config.lock().unwrap().clone()
+    crate::lock_or_recover!(config).clone()
 }
 
 #[tauri::command]
@@ -83,7 +83,7 @@ pub fn set_config(
     }
 
     let (old_mode, old_volume, old_autostart, old_debug_mode, old_listen_enabled, old_hotkey, old_tts_config) = {
-        let cfg = config.lock().unwrap();
+        let cfg = crate::lock_or_recover!(config);
         (
             cfg.playback.on_retrigger.clone(),
             cfg.playback.volume,
@@ -134,7 +134,7 @@ pub fn set_config(
         None
     };
 
-    let mut cfg = config.lock().unwrap();
+    let mut cfg = crate::lock_or_recover!(config);
     *cfg = new_config;
 
     config::save(&cfg)?;
@@ -146,8 +146,8 @@ pub fn set_config(
     drop(cfg);
 
     if mode_changed || volume_changed {
-        let cfg = config.lock().unwrap();
-        let mut p = player.lock().unwrap();
+        let cfg = crate::lock_or_recover!(config);
+        let mut p = crate::lock_or_recover!(player);
         if mode_changed {
             p.set_mode(cfg.playback.on_retrigger.clone());
         }
@@ -158,7 +158,7 @@ pub fn set_config(
 
     if autostart_changed {
         let enabled = {
-            let cfg = config.lock().unwrap();
+            let cfg = crate::lock_or_recover!(config);
             cfg.general.start_with_windows
         };
         if let Err(e) = crate::autostart::sync_autostart_with_config(enabled) {
@@ -176,7 +176,7 @@ pub fn set_config(
 
     if hotkey_changed {
         let new_hotkey = {
-            let cfg = config.lock().unwrap();
+            let cfg = crate::lock_or_recover!(config);
             log::info!(
                 "[Config] Hotkey changed - enabled: {}, shortcut: {}",
                 cfg.hotkey.enabled,

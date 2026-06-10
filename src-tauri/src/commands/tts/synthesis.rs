@@ -255,6 +255,9 @@ pub async fn speak_now(
     }
 
     let lock_state = app.state::<tokio::sync::Mutex<()>>();
+    // Preempt any in-flight job: it exits at its next abort check and releases
+    // the lock to this request instead of finishing the obsolete synthesis.
+    crate::ABORT_REQUESTED.store(true, Ordering::Relaxed);
     let _queue_lock = lock_state.lock().await;
 
     // Clear any previous abort request
@@ -367,6 +370,13 @@ pub async fn speak_now(
 
     let synthesis_duration = synthesis_start.elapsed();
     let synthesis_ms = synthesis_duration.as_millis() as u64;
+
+    // Aborted (or empty) synthesis must not poison telemetry, persist a bogus
+    // success history entry, re-show the HUD, or emit empty audio.
+    if crate::ABORT_REQUESTED.load(Ordering::Relaxed) || wav_bytes.is_empty() {
+        log::info!("[TTS] Synthesis aborted or produced no audio — skipping output");
+        return Ok(());
+    }
 
     // Record telemetry
     record_telemetry(
@@ -586,6 +596,17 @@ async fn handle_playback_output(
     };
     let env_ms = t_env.elapsed().as_millis() as u64;
 
+    // Cache audio for replay
+    cache_audio(app, wav_bytes, text);
+
+    // Show HUD with waveform visualization
+    hud::show_hud(app, envelope.clone(), Some(text.to_string()));
+
+    // Emit audio to frontend FIRST — playback must not wait on history disk IO
+    let t_emit = std::time::Instant::now();
+    emit_audio_ready(app, wav_bytes).await;
+    let emit_ms = t_emit.elapsed().as_millis() as u64;
+
     let engine_id = engine_identifier(active_backend, tts_config);
     let voice_name = voice_display_name(active_backend, tts_config, voice);
     let audio_ext = backend_arc.file_extension().to_string();
@@ -608,17 +629,6 @@ async fn handle_playback_output(
         false,
     );
     let _ = app.emit("history-updated", ());
-
-    // Cache audio for replay
-    cache_audio(app, wav_bytes, text);
-
-    // Show HUD with waveform visualization
-    hud::show_hud(app, envelope, Some(text.to_string()));
-
-    // Emit audio to frontend for browser-native playback
-    let t_emit = std::time::Instant::now();
-    emit_audio_ready(app, wav_bytes).await;
-    let emit_ms = t_emit.elapsed().as_millis() as u64;
 
     let post_ms = t_post.elapsed().as_millis() as u64;
     log::info!(
@@ -653,6 +663,9 @@ pub async fn speak_queued(
     }
 
     let lock_state = app.state::<tokio::sync::Mutex<()>>();
+    // Preempt any in-flight job: it exits at its next abort check and releases
+    // the lock to this request instead of finishing the obsolete synthesis.
+    crate::ABORT_REQUESTED.store(true, Ordering::Relaxed);
     let _queue_lock = lock_state.lock().await;
 
     // Clear any previous abort request
@@ -896,7 +909,9 @@ async fn synthesize_queued_sequential(
     for (index, fragment) in fragments.iter().enumerate() {
         {
             let q = crate::lock_or_recover!(queue);
-            if q.should_stop() {
+            // Abort (tray/HUD stop or a newer speak request) must stop local
+            // sequential batches too, not just the explicit stop_queue command.
+            if q.should_stop() || crate::ABORT_REQUESTED.load(Ordering::Relaxed) {
                 log::info!("[Queue] Playback stopped by user");
                 q.clear();
                 let _ = app.emit(
@@ -947,6 +962,14 @@ async fn synthesize_queued_sequential(
             hud::show_hud(app, envelope.clone(), None);
         }
 
+        // Await previous fragment's emit to preserve order, then spawn current emit.
+        // Emitting before the history disk write keeps storage IO off the
+        // time-to-audio path; encoding overlaps with the IO below.
+        if let Some(handle) = pending_emit.take() {
+            let _ = handle.await;
+        }
+        pending_emit = Some(spawn_fragment_emit(app, &wav_bytes, index, total, fragment.text.clone(), Some(envelope.duration_ms)));
+
         let audio_ext = backend_arc.file_extension().to_string();
         let voice_name = voice_display_name(active_backend, tts_config, voice);
         let history_path =
@@ -959,13 +982,6 @@ async fn synthesize_queued_sequential(
         }
 
         add_history_with_metadata(history, &fragment.text, engine_str_val, voice, envelope.duration_ms, history_path, batch_id.clone(), fragment_duration.as_millis() as u64, Some(metadata), true);
-
-        // Await previous fragment's emit to preserve order, then spawn current emit.
-        // This overlaps current synthesis with previous emit's base64 encoding.
-        if let Some(handle) = pending_emit.take() {
-            let _ = handle.await;
-        }
-        pending_emit = Some(spawn_fragment_emit(app, &wav_bytes, index, total, fragment.text.clone(), Some(envelope.duration_ms)));
 
         let _ = app.emit(
             "pagination:fragment-ready",
@@ -1034,6 +1050,9 @@ async fn synthesize_queued_parallel(
                     is_paginated: total > 1,
                 },
             );
+            // User abort is not a failure — suppress the post-loop
+            // "incomplete" error so this matches the sequential path.
+            is_aborted = true;
             break;
         }
 
@@ -1130,6 +1149,10 @@ async fn synthesize_queued_parallel(
                     hud::show_hud(app, envelope.clone(), None);
                 }
 
+                // Emit audio before the history disk write so storage IO never
+                // delays fragment playback.
+                emit_audio_fragment(app, wav_bytes, emit_cursor, total, fragment.text.clone(), Some(envelope.duration_ms)).await;
+
                 let audio_ext = backend_arc.file_extension().to_string();
                 let voice_name = voice_display_name(active_backend, tts_config, voice);
                 let history_path = save_to_history_storage(
@@ -1167,8 +1190,6 @@ async fn synthesize_queued_parallel(
                     Some(metadata),
                     true,
                 );
-
-                emit_audio_fragment(app, wav_bytes, emit_cursor, total, fragment.text.clone(), Some(envelope.duration_ms)).await;
 
                 let _ = app.emit(
                     "pagination:fragment-ready",
@@ -1250,6 +1271,9 @@ pub async fn speak_history_entry(
     }
 
     let lock_state = app.state::<tokio::sync::Mutex<()>>();
+    // Preempt any in-flight job: it exits at its next abort check and releases
+    // the lock to this request instead of finishing the obsolete synthesis.
+    crate::ABORT_REQUESTED.store(true, Ordering::Relaxed);
     let _queue_lock = lock_state.lock().await;
 
     // Clear any previous abort request
@@ -1316,6 +1340,14 @@ pub async fn speak_history_entry(
         }
     };
 
+    let audio_duration_ms = envelope.duration_ms;
+
+    // Show HUD with waveform visualization
+    hud::show_hud(&app, envelope, Some(text.clone()));
+
+    // Emit audio to frontend FIRST — playback must not wait on history disk IO
+    emit_audio_ready(&app, &wav_bytes).await;
+
     // Save to history
     let history_path =
         save_to_history_storage(&config, &wav_bytes, &engine_id, &voice_name, &audio_ext);
@@ -1325,7 +1357,7 @@ pub async fn speak_history_entry(
         &text,
         engine_str_val,
         &voice,
-        envelope.duration_ms,
+        audio_duration_ms,
         history_path,
         None,
         synthesis_ms,
@@ -1333,12 +1365,6 @@ pub async fn speak_history_entry(
         false,
     );
     let _ = app.emit("history-updated", ());
-
-    // Show HUD with waveform visualization
-    hud::show_hud(&app, envelope, Some(text.clone()));
-
-    // Emit audio to frontend
-    emit_audio_ready(&app, &wav_bytes).await;
 
     log::info!("Re-spoke history entry: {}", entry_id);
     Ok(())

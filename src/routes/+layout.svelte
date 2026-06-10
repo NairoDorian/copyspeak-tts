@@ -49,7 +49,7 @@
   const isHud = $derived(page.url.pathname === "/hud" || isHudByPath);
   const isWeb = import.meta.env.VITE_IS_VERCEL;
 
-  let unlistenSpeak: (() => void) | null = null;
+  let unlistenConfig: (() => void) | null = null;
 
   onMount(async () => {
     if (isWeb) return;
@@ -110,6 +110,7 @@
       const { volume, playback_speed, pitch } = config.playback;
       const activeEffect = config.effects?.enabled ? config.effects.active_effect : "none";
       playbackStore.syncPlaybackConfig(volume, playback_speed, pitch, activeEffect);
+      playbackStore.hudEnabled = config.hud.enabled;
     } catch (e) {
       console.error("Failed to sync appearance/locale:", e);
     }
@@ -127,23 +128,19 @@
 
     await startHistoryEventListeners();
 
+    // Double-copy synthesis is dispatched natively by the Rust clipboard
+    // listener — no speak-request webview round-trip anymore.
     if (isTauri) {
       try {
         const { listen } = await import("@tauri-apps/api/event");
-        const { invoke: tauriInvoke } = await import("@tauri-apps/api/core");
-
-        unlistenSpeak = await listen<{ text: string }>("speak-request", async (e) => {
-          console.log("[LAYOUT] speak-request received, text length:", e.payload.text.length);
+        unlistenConfig = await listen("config-changed", async () => {
           try {
-            // Use speak_queued so large texts are automatically paginated
-            // into fragments and played sequentially.
-            await tauriInvoke("speak_queued", { text: e.payload.text });
-            console.log("[LAYOUT] speak_queued completed successfully");
+            const config = await invoke<AppConfig>("get_config");
+            playbackStore.hudEnabled = config.hud.enabled;
           } catch (err) {
-            console.error("[LAYOUT] speak_queued failed:", err);
+            console.error("Failed to refresh config:", err);
           }
         });
-        console.log("[LAYOUT] speak-request listener registered");
       } catch (e) {
         console.error("Failed to set up listeners:", e);
       }
@@ -154,7 +151,7 @@
   onDestroy(async () => {
     if (isWeb) return;
     await stopHistoryEventListeners();
-    if (unlistenSpeak) unlistenSpeak();
+    if (unlistenConfig) unlistenConfig();
   });
 </script>
 

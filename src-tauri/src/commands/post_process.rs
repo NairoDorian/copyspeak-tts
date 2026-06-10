@@ -14,7 +14,7 @@ pub fn check_groq_credentials(
         log::debug!("[IPC] check_groq_credentials called");
     }
 
-    let api_key = config.lock().unwrap().post_process.api_key.clone();
+    let api_key = crate::lock_or_recover!(config).post_process.api_key.clone();
 
     if api_key.trim().is_empty() {
         return Ok(CredentialCheckResult {

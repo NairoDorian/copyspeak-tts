@@ -201,7 +201,7 @@ pub fn position_hud_window(hud_window: &WebviewWindow, config: &HudConfig) {
 pub fn show_hud(app: &AppHandle, envelope: AmplitudeEnvelope, text: Option<String>) {
     let (config, provider, voice) = {
         let state = app.state::<std::sync::Mutex<AppConfig>>();
-        let cfg = state.lock().unwrap();
+        let cfg = crate::lock_or_recover!(state);
         let (p, v) = get_provider_voice(&cfg);
         (cfg.hud.clone(), p, v)
     };
@@ -235,7 +235,7 @@ pub fn show_hud(app: &AppHandle, envelope: AmplitudeEnvelope, text: Option<Strin
 pub fn show_hud_synthesizing(app: &AppHandle, text: Option<String>) {
     let (config, provider, voice) = {
         let state = app.state::<std::sync::Mutex<AppConfig>>();
-        let cfg = state.lock().unwrap();
+        let cfg = crate::lock_or_recover!(state);
         let (p, v) = get_provider_voice(&cfg);
         (cfg.hud.clone(), p, v)
     };
@@ -271,7 +271,7 @@ pub fn show_hud_synthesizing(app: &AppHandle, text: Option<String>) {
 pub fn show_hud_playback(app: &AppHandle, text: Option<String>, audio_duration_ms: Option<u64>) {
     let (config, provider, voice) = {
         let state = app.state::<std::sync::Mutex<AppConfig>>();
-        let cfg = state.lock().unwrap();
+        let cfg = crate::lock_or_recover!(state);
         let (p, v) = get_provider_voice(&cfg);
         (cfg.hud.clone(), p, v)
     };
@@ -335,7 +335,7 @@ pub fn emit_synthesis_progress(
 ) {
     let config = {
         let state = app.state::<std::sync::Mutex<AppConfig>>();
-        let cfg = state.lock().unwrap();
+        let cfg = crate::lock_or_recover!(state);
         cfg.hud.clone()
     };
 
@@ -363,7 +363,7 @@ pub fn emit_synthesis_progress(
 pub fn show_hud_clipboard_copied(app: &AppHandle, trigger_window_ms: u64) {
     let config = {
         let state = app.state::<std::sync::Mutex<AppConfig>>();
-        let cfg = state.lock().unwrap();
+        let cfg = crate::lock_or_recover!(state);
         cfg.hud.clone()
     };
 

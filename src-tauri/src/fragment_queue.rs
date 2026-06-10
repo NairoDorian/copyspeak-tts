@@ -63,11 +63,14 @@ impl FragmentQueue {
         );
     }
 
-    /// Clear all fragments from the queue.
+    /// Clear all fragments from the queue and re-arm the stop flag.
     pub fn clear(&self) {
         let mut fragments = self.fragments.lock().unwrap_or_else(|p| p.into_inner());
         fragments.clear();
         self.current_index.store(usize::MAX, Ordering::SeqCst);
+        // Re-arm: without this, one stop() permanently short-circuits every
+        // subsequent sequential synthesis run.
+        self.stop_flag.store(false, Ordering::SeqCst);
         log::debug!("[FragmentQueue] Queue cleared");
     }
 
@@ -130,7 +133,7 @@ impl FragmentQueue {
         Ok(())
     }
 
-    /// Stop playback and clear the stop flag.
+    /// Request stop; the flag is re-armed by `clear()`.
     pub fn stop(&self) {
         self.stop_flag.store(true, Ordering::SeqCst);
         self.set_status(QueueStatus::Stopped);

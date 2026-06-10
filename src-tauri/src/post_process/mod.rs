@@ -20,6 +20,10 @@ fn groq_client() -> &'static Client {
             .pool_idle_timeout(std::time::Duration::from_secs(90))
             .tcp_nodelay(true)
             .tcp_keepalive(std::time::Duration::from_secs(60))
+            // This sits directly on the synthesis hot path — a hung request
+            // must fall back to the original text, not stall TTS forever.
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("Failed to create Groq HTTP client")
     })

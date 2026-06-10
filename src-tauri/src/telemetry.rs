@@ -257,6 +257,7 @@ pub fn load() -> TelemetryLog {
 }
 
 /// Save telemetry to disk.
+/// Write-then-rename so a crash mid-write can't truncate the file.
 pub fn save(telemetry: &TelemetryLog) {
     let path = telemetry_path();
     if let Some(parent) = path.parent() {
@@ -265,7 +266,8 @@ pub fn save(telemetry: &TelemetryLog) {
     let json = serde_json::to_string_pretty(telemetry);
     match json {
         Ok(j) => {
-            if let Err(e) = std::fs::write(&path, j) {
+            let tmp = path.with_extension("json.tmp");
+            if let Err(e) = std::fs::write(&tmp, j).and_then(|_| std::fs::rename(&tmp, &path)) {
                 log::warn!("Failed to save telemetry: {e}");
             }
         }

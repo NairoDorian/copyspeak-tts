@@ -78,8 +78,10 @@
     totalFragments: number;
   }
 
-  // Get recent items sorted descending by timestamp, grouped by batch_id
-  const recentGrouped = $derived(() => {
+  // Get recent items sorted descending by timestamp, grouped by batch_id.
+  // $derived.by memoizes the value — $derived(() => ...) stored a function
+  // that re-ran the full sort+group on every call site.
+  const recentGrouped = $derived.by(() => {
     const sortedItems = [...historyStore.items].sort((a, b) => b.timestamp - a.timestamp);
     const seenBatchIds = new Set<string>();
     const result: Array<GroupedItem | GroupedBatch> = [];
@@ -217,7 +219,7 @@
 
   function selectAllVisible() {
     const ids = new Set<string>();
-    for (const g of recentGrouped()) {
+    for (const g of recentGrouped) {
       if (g.type === "single") {
         ids.add(g.item.id);
       } else {
@@ -273,7 +275,7 @@
   }
 
   let allSelectedVisible = $derived.by(() => {
-    const all = recentGrouped();
+    const all = recentGrouped;
     if (all.length === 0) return false;
     for (const g of all) {
       if (g.type === "single" && !selectedIds.has(g.item.id)) return false;
@@ -349,11 +351,11 @@
     />
   {/if}
 
-  {#if recentGrouped().length === 0}
+  {#if recentGrouped.length === 0}
     <p class="text-muted-foreground py-4 text-center text-sm italic">{$_("history.empty")}</p>
   {:else}
     <div class="space-y-2">
-      {#each recentGrouped() as grouped (grouped.type === "batch" ? grouped.batchId : grouped.item.id)}
+      {#each recentGrouped as grouped (grouped.type === "batch" ? grouped.batchId : grouped.item.id)}
         {#if grouped.type === "single"}
           {@const item = grouped.item}
           <div

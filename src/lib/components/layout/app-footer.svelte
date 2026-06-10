@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { SvelteMap } from "svelte/reactivity";
   import { cn } from "$lib/utils.js";
   import { listeningStore } from "$lib/stores/listening-store.svelte";
   import { piperStore } from "$lib/stores/piper-store.svelte";
@@ -70,8 +71,10 @@
   // Availability status type
   type AvailabilityStatus = "unknown" | "checking" | "available" | "unavailable" | "error";
 
-  // Cached availability state (only checked when user explicitly switches engines)
-  let availability = $state<Map<string, AvailabilityStatus>>(new Map());
+  // Cached availability state (only checked when user explicitly switches engines).
+  // SvelteMap makes .set()/.get() reactive — a plain Map inside $state is not
+  // deep-proxied, so in-place mutations never updated the status indicators.
+  const availability = new SvelteMap<string, AvailabilityStatus>();
 
   // Engine metadata
   interface EngineMeta {

@@ -37,10 +37,26 @@
     voices = voiceCache;
   }
 
-  // Style slider: syncs FROM config when parent cancels
+  // Sliders: sync FROM config when parent cancels
   // Sync TO config happens via Slider's onchange callback (avoids race condition)
-  // untrack() prevents tracking styleValue - effect only runs when localConfig changes
+  // untrack() prevents tracking local values - effect only runs when localConfig changes
+  let stabilityValue = $state(localConfig.tts.elevenlabs.voice_stability ?? 0.75);
+  let similarityValue = $state(localConfig.tts.elevenlabs.voice_similarity_boost ?? 0.75);
   let styleValue = $state(localConfig.tts.elevenlabs.voice_style ?? 0);
+
+  $effect(() => {
+    const configValue = localConfig.tts.elevenlabs.voice_stability ?? 0.75;
+    if (untrack(() => stabilityValue) !== configValue) {
+      stabilityValue = configValue;
+    }
+  });
+
+  $effect(() => {
+    const configValue = localConfig.tts.elevenlabs.voice_similarity_boost ?? 0.75;
+    if (untrack(() => similarityValue) !== configValue) {
+      similarityValue = configValue;
+    }
+  });
 
   $effect(() => {
     const configValue = localConfig.tts.elevenlabs.voice_style ?? 0;
@@ -255,7 +271,7 @@
           <InfoTooltip text={$_("engine.elevenlabsEngine.stabilityTooltip")} />
         </div>
         <span class="text-muted-foreground font-mono text-xs">
-          {localConfig.tts.elevenlabs.voice_stability.toFixed(2)}
+          {stabilityValue.toFixed(2)}
         </span>
       </div>
       <Slider
@@ -263,7 +279,10 @@
         min={0}
         max={1}
         step={0.01}
-        bind:value={localConfig.tts.elevenlabs.voice_stability}
+        bind:value={stabilityValue}
+        onchange={(v) => {
+          localConfig.tts.elevenlabs.voice_stability = v;
+        }}
       />
     </div>
 
@@ -274,7 +293,7 @@
           <InfoTooltip text={$_("engine.elevenlabsEngine.similarityTooltip")} />
         </div>
         <span class="text-muted-foreground font-mono text-xs">
-          {localConfig.tts.elevenlabs.voice_similarity_boost.toFixed(2)}
+          {similarityValue.toFixed(2)}
         </span>
       </div>
       <Slider
@@ -282,7 +301,10 @@
         min={0}
         max={1}
         step={0.01}
-        bind:value={localConfig.tts.elevenlabs.voice_similarity_boost}
+        bind:value={similarityValue}
+        onchange={(v) => {
+          localConfig.tts.elevenlabs.voice_similarity_boost = v;
+        }}
       />
     </div>
 

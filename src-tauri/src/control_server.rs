@@ -166,12 +166,16 @@ fn parse_request(buffer: &[u8], expected_token: &Option<String>) -> Result<Contr
         let expected = format!("Bearer {token}");
         match auth_header {
             Some(auth) => {
-                // Constant-time compare: byte-wise XOR fold
+                // Constant-time compare: byte-wise XOR fold over the common
+                // prefix, plus an untruncated length check (an `as u8` cast
+                // here would accept lengths differing by multiples of 256).
                 let mut diff = 0u8;
                 for (a, b) in auth.bytes().zip(expected.bytes()) {
                     diff |= a ^ b;
                 }
-                diff |= (auth.len() ^ expected.len()) as u8;
+                if auth.len() != expected.len() {
+                    diff |= 1;
+                }
                 if diff != 0 {
                     return Err((401, "Unauthorized: invalid or missing token".to_string()));
                 }

@@ -241,17 +241,42 @@ fn spawn_speak(app: &tauri::AppHandle) {
         // speak_now's paginated path waits for all fragments then concats — TTFA
         // equals full synthesis time. speak_queued streams each fragment as it
         // arrives, so the user hears audio after the first fragment.
-        let use_streaming = {
-            let cfg = config.lock().unwrap();
-            let pagination = &cfg.pagination;
-            let output = &cfg.output;
-            if let Some(clip_text) = crate::clipboard::get_clipboard_text() {
-                pagination.enabled
-                    && !output.enabled
-                    && clip_text.chars().count() > pagination.fragment_size as usize
+        // Read the clipboard once and pass the text through so the command
+        // doesn't open the clipboard a second time.
+        let clip_text = crate::clipboard::get_clipboard_text();
+        let (sanitization_config, max_text_length, pagination_enabled, output_enabled, fragment_size) = {
+            let cfg = crate::lock_or_recover!(config);
+            (
+                cfg.sanitization.clone(),
+                cfg.trigger.max_text_length,
+                cfg.pagination.enabled,
+                cfg.output.enabled,
+                cfg.pagination.fragment_size,
+            )
+        };
+
+        // Mirror the double-copy path: sanitize and cap the clipboard text so
+        // the hotkey/tray trigger speaks the same thing a double-copy would.
+        let clip_text = clip_text.map(|text| {
+            let sanitized = if sanitization_config.enabled {
+                crate::sanitize::sanitize_text(&text, &sanitization_config)
             } else {
-                false
+                text
+            };
+            if sanitized.chars().count() > max_text_length as usize {
+                sanitized.chars().take(max_text_length as usize).collect()
+            } else {
+                sanitized
             }
+        });
+
+        let use_streaming = match &clip_text {
+            Some(text) => {
+                pagination_enabled
+                    && !output_enabled
+                    && text.chars().count() > fragment_size as usize
+            }
+            None => false,
         };
 
         let result = if use_streaming {
@@ -264,7 +289,7 @@ fn spawn_speak(app: &tauri::AppHandle) {
                 history,
                 queue,
                 telemetry_state,
-                None,
+                clip_text,
             )
             .await
         } else {
@@ -274,7 +299,7 @@ fn spawn_speak(app: &tauri::AppHandle) {
                 player,
                 history,
                 telemetry_state,
-                None,
+                clip_text,
             )
             .await
         };
@@ -290,6 +315,10 @@ fn spawn_speak(app: &tauri::AppHandle) {
 pub fn do_abort_synthesis(app: &tauri::AppHandle) {
     log::info!("[Abort] Aborting synthesis");
 
+    // Signal abort FIRST so the failing request's error handlers (and the
+    // fragment loops) observe the flag before the server disappears.
+    ABORT_REQUESTED.store(true, Ordering::Relaxed);
+
     // Kill CLI process if running
     let pid = ACTIVE_CLI_PID.load(Ordering::Relaxed);
     if pid != 0 {
@@ -299,11 +328,23 @@ pub fn do_abort_synthesis(app: &tauri::AppHandle) {
 
     // When Piper server is active, unload it so any blocked send()
     // errors out immediately rather than waiting for the per-request
-    // timeout. The next utterance will prewarm again.
+    // timeout.
     let _ = crate::tts::cli::unload_piper_model_internal();
 
-    // Signal abort to synthesis tasks
-    ABORT_REQUESTED.store(true, Ordering::Relaxed);
+    // Re-prewarm Piper in the background so the next utterance doesn't pay a
+    // multi-second cold start — the reload overlaps user idle time.
+    {
+        let config = app.state::<std::sync::Mutex<config::AppConfig>>();
+        let cfg = crate::lock_or_recover!(config);
+        if cfg.tts.active_backend == config::TtsEngine::Local && cfg.tts.preset == "piper" {
+            crate::tts::cli::prewarm_piper_server(
+                cfg.tts.command.clone(),
+                cfg.tts.voice.clone(),
+                tts::cli::CliTtsBackend::data_dir(),
+                cfg.tts.cuda,
+            );
+        }
+    }
 
     // Reset synthesis state
     {
@@ -362,12 +403,11 @@ fn main() {
             app.manage(std::sync::Mutex::new(cfg));
 
             // --- Init audio player with saved config ---
-            let app_handle = app.handle().clone();
-            let mut player = audio::AudioPlayer::new(app_handle);
+            let mut player = audio::AudioPlayer::new();
             // Apply saved mode from config
             {
                 let cfg = app.state::<std::sync::Mutex<config::AppConfig>>();
-                let cfg = cfg.lock().unwrap();
+                let cfg = crate::lock_or_recover!(cfg);
                 player.set_mode(cfg.playback.on_retrigger.clone());
             }
             app.manage(std::sync::Mutex::new(player));
@@ -549,7 +589,7 @@ fn main() {
                         let close_behavior = {
                             let cfg: State<std::sync::Mutex<config::AppConfig>> =
                                 app_handle.state();
-                            let cfg = cfg.lock().unwrap();
+                            let cfg = crate::lock_or_recover!(cfg);
                             cfg.general.close_behavior.clone()
                         };
 
@@ -572,7 +612,7 @@ fn main() {
             // --- Position HUD window and make it click-through at startup ---
             if let Some(hud_window) = app.get_webview_window("hud") {
                 let cfg_state = app.state::<std::sync::Mutex<config::AppConfig>>();
-                let cfg = cfg_state.lock().unwrap();
+                let cfg = crate::lock_or_recover!(cfg_state);
                 hud::position_hud_window(&hud_window, &cfg.hud);
                 drop(cfg);
                 let _ = hud_window.set_ignore_cursor_events(true);
@@ -594,7 +634,7 @@ fn main() {
                 tts::piper_server::set_piper_app_handle(app.handle().clone());
 
                 let cfg = app.state::<std::sync::Mutex<config::AppConfig>>();
-                let cfg = cfg.lock().unwrap();
+                let cfg = crate::lock_or_recover!(cfg);
                 if cfg.tts.active_backend == config::TtsEngine::Local && cfg.tts.preset == "piper" {
                     let data_dir = tts::cli::CliTtsBackend::data_dir();
                     log::info!("[Piper] Auto-starting server at app launch (voice: {}, cuda: {})", cfg.tts.voice, cfg.tts.cuda);
@@ -610,7 +650,7 @@ fn main() {
             // --- Register global hotkey ---
             let hotkey_config = {
                 let cfg = app.state::<std::sync::Mutex<config::AppConfig>>();
-                let cfg = cfg.lock().unwrap();
+                let cfg = crate::lock_or_recover!(cfg);
                 cfg.hotkey.clone()
             };
 
@@ -625,7 +665,7 @@ fn main() {
                 let player: State<std::sync::Mutex<audio::AudioPlayer>> =
                     app_handle_for_monitor.state();
                 let finished = {
-                    let p = player.lock().unwrap();
+                    let p = crate::lock_or_recover!(player);
                     p.take_playback_finished()
                 };
                 if finished {
@@ -677,6 +717,7 @@ fn main() {
             commands::skip_forward,
             commands::skip_backward,
             commands::set_playback_speed,
+            commands::set_playback_state,
             commands::get_playback_state,
             commands::set_listening,
             commands::get_listening,

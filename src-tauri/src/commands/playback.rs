@@ -21,8 +21,9 @@ pub fn abort_synthesis(app: tauri::AppHandle) -> Result<(), String> {
 
 /// Replay the most recently cached audio without re-synthesizing.
 /// Emits "audio-ready" event to frontend with base64-encoded audio.
+/// Async so the multi-MB base64 encode runs on the blocking pool, not the main thread.
 #[tauri::command]
-pub fn replay_cached(
+pub async fn replay_cached(
     app: tauri::AppHandle,
     cache: State<'_, Mutex<CachedAudio>>,
 ) -> Result<(), String> {
@@ -30,7 +31,7 @@ pub fn replay_cached(
         log::debug!("[IPC] replay_cached called");
     }
     let wav_bytes = {
-        let cache = cache.lock().unwrap();
+        let cache = crate::lock_or_recover!(cache);
         cache
             .wav_bytes
             .clone()
@@ -38,7 +39,9 @@ pub fn replay_cached(
     };
 
     use base64::{engine::general_purpose, Engine as _};
-    let encoded = general_purpose::STANDARD.encode(&wav_bytes);
+    let encoded = tokio::task::spawn_blocking(move || general_purpose::STANDARD.encode(&wav_bytes))
+        .await
+        .map_err(|e| format!("Task join error: {e}"))?;
     if let Err(e) = app.emit("audio-ready", encoded) {
         log::warn!("Failed to emit audio-ready: {}", e);
     }
@@ -59,7 +62,7 @@ pub fn stop_speaking(
         log::warn!("Failed to emit playback-stop: {}", e);
     }
     // Keep Rodio stop as safety net
-    let mut p = player.lock().unwrap();
+    let mut p = crate::lock_or_recover!(player);
     p.stop();
     p.set_playing_entry_id(None);
     Ok(())
@@ -78,7 +81,7 @@ pub fn toggle_pause(
         log::warn!("Failed to emit playback-toggle-pause: {}", e);
     }
     // Keep Rodio toggle as safety net
-    let mut p = player.lock().unwrap();
+    let mut p = crate::lock_or_recover!(player);
     p.toggle_pause();
     Ok(())
 }
@@ -91,7 +94,7 @@ pub fn skip_forward(
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] skip_forward called (seconds: {:?})", seconds);
     }
-    let mut p = player.lock().unwrap();
+    let mut p = crate::lock_or_recover!(player);
     p.skip_forward(seconds.unwrap_or(5));
     Ok(())
 }
@@ -104,7 +107,7 @@ pub fn skip_backward(
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] skip_backward called (seconds: {:?})", seconds);
     }
-    let mut p = player.lock().unwrap();
+    let mut p = crate::lock_or_recover!(player);
     p.skip_backward(seconds.unwrap_or(5));
     Ok(())
 }
@@ -116,10 +119,28 @@ pub fn set_playback_speed(config: State<'_, Mutex<AppConfig>>, speed: f32) -> Re
         log::debug!("[IPC] set_playback_speed called (speed: {})", speed);
     }
     let clamped = speed.clamp(0.25, 4.0);
-    let mut cfg = config.lock().unwrap();
+    let mut cfg = crate::lock_or_recover!(config);
     cfg.playback.playback_speed = clamped;
     crate::config::save(&cfg)?;
     log::info!("Playback speed set to: {}", clamped);
+    Ok(())
+}
+
+/// Report frontend <audio> playback state. Playback happens in the webview;
+/// the backend needs this for the tray busy icon, tray click behavior
+/// (pause vs open window), and HUD auto-hide.
+#[tauri::command]
+pub fn set_playback_state(
+    app: tauri::AppHandle,
+    player: State<'_, Mutex<AudioPlayer>>,
+    playing: bool,
+    paused: bool,
+) -> Result<(), String> {
+    {
+        let p = crate::lock_or_recover!(player);
+        p.set_playback_state_reported(playing, paused);
+    }
+    crate::update_tray_icon(&app);
     Ok(())
 }
 
@@ -128,7 +149,7 @@ pub fn get_playback_state(player: State<'_, Mutex<AudioPlayer>>) -> PlaybackStat
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] get_playback_state called");
     }
-    let p = player.lock().unwrap();
+    let p = crate::lock_or_recover!(player);
     p.get_state()
 }
 
@@ -139,7 +160,7 @@ pub fn set_volume(config: State<'_, Mutex<AppConfig>>, volume: u8) -> Result<(),
         log::debug!("[IPC] set_volume called (volume: {})", volume);
     }
 
-    let mut cfg = config.lock().unwrap();
+    let mut cfg = crate::lock_or_recover!(config);
     cfg.playback.volume = volume;
     crate::config::save(&cfg)?;
 
@@ -149,8 +170,9 @@ pub fn set_volume(config: State<'_, Mutex<AppConfig>>, volume: u8) -> Result<(),
 
 /// Play audio from a history entry if it has an output file.
 /// Emits "audio-ready" event to frontend with base64-encoded audio.
+/// Async so file IO and base64 encoding run on the blocking pool, not the main thread.
 #[tauri::command]
-pub fn play_history_entry(
+pub async fn play_history_entry(
     app: tauri::AppHandle,
     history: State<'_, Mutex<HistoryLog>>,
     entry_id: String,
@@ -160,7 +182,7 @@ pub fn play_history_entry(
     }
 
     let output_path = {
-        let hist = history.lock().unwrap();
+        let hist = crate::lock_or_recover!(history);
         let entry = hist
             .get_by_id(&entry_id)
             .ok_or_else(|| format!("History entry not found: {}", entry_id))?;
@@ -172,40 +194,45 @@ pub fn play_history_entry(
             .clone()
     };
 
-    if !std::path::Path::new(&output_path).exists() {
-        log::error!("[Audio] Audio file not found: {}", output_path);
-        return Err(format!(
-            "Audio file not found: {}. The file may have been deleted or moved.",
-            output_path
-        ));
-    }
+    let encoded = tokio::task::spawn_blocking(move || -> Result<String, String> {
+        if !std::path::Path::new(&output_path).exists() {
+            log::error!("[Audio] Audio file not found: {}", output_path);
+            return Err(format!(
+                "Audio file not found: {}. The file may have been deleted or moved.",
+                output_path
+            ));
+        }
 
-    let wav_bytes = std::fs::read(&output_path)
-        .map_err(|e| {
-            log::error!("[Audio] Failed to read audio file '{}': {}", output_path, e);
-            match e.kind() {
-                std::io::ErrorKind::NotFound => {
-                    format!("Audio file not found: {}. The file may have been deleted.", output_path)
+        let wav_bytes = std::fs::read(&output_path)
+            .map_err(|e| {
+                log::error!("[Audio] Failed to read audio file '{}': {}", output_path, e);
+                match e.kind() {
+                    std::io::ErrorKind::NotFound => {
+                        format!("Audio file not found: {}. The file may have been deleted.", output_path)
+                    }
+                    std::io::ErrorKind::PermissionDenied => {
+                        format!("Permission denied reading audio file: {}. Check file permissions.", output_path)
+                    }
+                    _ => {
+                        format!("Failed to read audio file '{}': {}. The file may be corrupted or inaccessible.", output_path, e)
+                    }
                 }
-                std::io::ErrorKind::PermissionDenied => {
-                    format!("Permission denied reading audio file: {}. Check file permissions.", output_path)
-                }
-                _ => {
-                    format!("Failed to read audio file '{}': {}. The file may be corrupted or inaccessible.", output_path, e)
-                }
-            }
-        })?;
+            })?;
 
-    if wav_bytes.is_empty() {
-        log::error!("[Audio] Audio file is empty: {}", output_path);
-        return Err(format!(
-            "Audio file is empty: {}. The file may be corrupted.",
-            output_path
-        ));
-    }
+        if wav_bytes.is_empty() {
+            log::error!("[Audio] Audio file is empty: {}", output_path);
+            return Err(format!(
+                "Audio file is empty: {}. The file may be corrupted.",
+                output_path
+            ));
+        }
 
-    use base64::{engine::general_purpose, Engine as _};
-    let encoded = general_purpose::STANDARD.encode(&wav_bytes);
+        use base64::{engine::general_purpose, Engine as _};
+        Ok(general_purpose::STANDARD.encode(&wav_bytes))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))??;
+
     if let Err(e) = app.emit("audio-ready", encoded) {
         log::warn!("Failed to emit audio-ready: {}", e);
     }

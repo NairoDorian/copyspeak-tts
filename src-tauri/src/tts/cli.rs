@@ -426,7 +426,11 @@ impl CliTtsBackend {
             .json(&body)
             .send()
             .map_err(|e| {
-                let _ = crate::tts::piper_server::unload_piper_model();
+                // On abort the server was already unloaded and a fresh prewarm
+                // may be starting — don't cancel it with another unload.
+                if !crate::ABORT_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = crate::tts::piper_server::unload_piper_model();
+                }
                 TtsError::Server(format!("HTTP request failed: {}", e))
             })?;
         let req_ms = t_req.elapsed().as_millis();
@@ -443,7 +447,11 @@ impl CliTtsBackend {
             .map_err(|e| {
                 // R3: Mid-stream read error → dying server. Unload so next
                 // attempt gets a fresh process rather than talking to a zombie.
-                let _ = crate::tts::piper_server::unload_piper_model();
+                // (Skip on abort — the abort path already unloaded and may be
+                // prewarming a replacement.)
+                if !crate::ABORT_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = crate::tts::piper_server::unload_piper_model();
+                }
                 TtsError::Server(format!("Failed to read response bytes: {}", e))
             })?
             .to_vec();
@@ -474,6 +482,11 @@ impl TtsBackend for CliTtsBackend {
                     return Ok(bytes);
                 }
                 Err(e) => {
+                    // Aborted: the server was unloaded on purpose. Do not pay a
+                    // cold CLI model load to re-synthesize an aborted fragment.
+                    if crate::ABORT_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
+                        return Err(e);
+                    }
                     log::warn!(
                         "[Piper] Server synthesis failed: {}. Falling back to CLI.",
                         e

@@ -9,8 +9,10 @@ pub(super) fn strip_markdown(text: &str) -> String {
     result = strip_inline_code(&result);
     result = strip_links(&result);
     result = strip_headers(&result);
-    result = strip_bold_italic(&result);
+    // Lists before bold/italic: stripping emphasis first deletes '*' bullet
+    // markers, so '*' list items would never get their terminal period.
     result = strip_lists(&result);
+    result = strip_bold_italic(&result);
     result = strip_blockquotes(&result);
     result
 }

@@ -73,7 +73,7 @@ pub fn get_history(history: State<'_, Mutex<HistoryLog>>) -> Vec<HistoryEntry> {
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] get_history called");
     }
-    let hist = history.lock().unwrap();
+    let hist = crate::lock_or_recover!(history);
     hist.entries().iter().cloned().collect()
 }
 
@@ -82,7 +82,7 @@ pub fn clear_history(history: State<'_, Mutex<HistoryLog>>) -> Result<(), String
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] clear_history called");
     }
-    let mut hist = history.lock().unwrap();
+    let mut hist = crate::lock_or_recover!(history);
     hist.clear();
     history::save(&hist)?;
     log::info!("History cleared");
@@ -100,7 +100,7 @@ pub fn get_history_with_metadata(
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] get_history_with_metadata called");
     }
-    let hist = history.lock().unwrap();
+    let hist = crate::lock_or_recover!(history);
     let entries: Vec<_> = hist.entries().iter().cloned().collect();
     let metadata = hist.metadata.clone();
     (entries, metadata)
@@ -114,7 +114,7 @@ pub fn get_history_statistics(
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] get_history_statistics called");
     }
-    let hist = history.lock().unwrap();
+    let hist = crate::lock_or_recover!(history);
     hist.get_statistics()
 }
 
@@ -126,7 +126,7 @@ pub fn get_file_tracking(
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] get_file_tracking called");
     }
-    let hist = history.lock().unwrap();
+    let hist = crate::lock_or_recover!(history);
     hist.metadata.file_tracking.clone()
 }
 
@@ -139,7 +139,7 @@ pub fn get_entry_by_file_path(
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] get_entry_by_file_path called (path: {})", file_path);
     }
-    let hist = history.lock().unwrap();
+    let hist = crate::lock_or_recover!(history);
     hist.get_entry_by_file_path(&file_path).cloned()
 }
 
@@ -149,7 +149,7 @@ pub fn verify_file_exists(history: State<'_, Mutex<HistoryLog>>, file_path: Stri
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] verify_file_exists called (path: {})", file_path);
     }
-    let mut hist = history.lock().unwrap();
+    let mut hist = crate::lock_or_recover!(history);
     hist.verify_file_exists(&file_path)
 }
 
@@ -159,7 +159,7 @@ pub fn verify_all_files(history: State<'_, Mutex<HistoryLog>>) -> (usize, usize)
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] verify_all_files called");
     }
-    let mut hist = history.lock().unwrap();
+    let mut hist = crate::lock_or_recover!(history);
     hist.verify_all_files()
 }
 
@@ -169,7 +169,7 @@ pub fn get_orphaned_files(history: State<'_, Mutex<HistoryLog>>) -> Vec<String> 
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] get_orphaned_files called");
     }
-    let hist = history.lock().unwrap();
+    let hist = crate::lock_or_recover!(history);
     hist.get_orphaned_files()
 }
 
@@ -179,7 +179,7 @@ pub fn get_missing_files(history: State<'_, Mutex<HistoryLog>>) -> Vec<(String, 
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] get_missing_files called");
     }
-    let hist = history.lock().unwrap();
+    let hist = crate::lock_or_recover!(history);
     hist.get_missing_files()
 }
 
@@ -190,7 +190,7 @@ pub fn unlink_file(
     file_path: String,
 ) -> Result<Option<String>, String> {
     log::debug!("[IPC] unlink_file called (path: {})", file_path);
-    let mut hist = history.lock().unwrap();
+    let mut hist = crate::lock_or_recover!(history);
     let entry_id = hist.unlink_file(&file_path);
     history::save(&hist)?;
     Ok(entry_id)
@@ -205,7 +205,7 @@ pub fn get_file_metadata(
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] get_file_metadata called (entry_id: {})", entry_id);
     }
-    let hist = history.lock().unwrap();
+    let hist = crate::lock_or_recover!(history);
     hist.get_file_metadata(&entry_id).cloned()
 }
 
@@ -215,7 +215,7 @@ pub fn is_file_tracked(history: State<'_, Mutex<HistoryLog>>, file_path: String)
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] is_file_tracked called (path: {})", file_path);
     }
-    let hist = history.lock().unwrap();
+    let hist = crate::lock_or_recover!(history);
     hist.is_file_tracked(&file_path)
 }
 
@@ -232,7 +232,7 @@ pub fn delete_history_entry(
 
     // Check if the entry is currently playing
     {
-        let p = player.lock().unwrap();
+        let p = crate::lock_or_recover!(player);
         if let Some(playing_id) = p.get_playing_entry_id() {
             if playing_id == entry_id {
                 log::warn!("Attempt to delete currently playing entry: {}", entry_id);
@@ -241,13 +241,17 @@ pub fn delete_history_entry(
         }
     }
 
-    let mut hist = history.lock().unwrap();
+    let mut hist = crate::lock_or_recover!(history);
     let entries_mut = hist.entries_mut();
 
     if let Some(pos) = entries_mut.iter().position(|e| e.id == entry_id) {
         let output_path = entries_mut[pos].output_path.clone();
         entries_mut.remove(pos);
         let _ = entries_mut;
+        // Keep file-tracking maps in sync with the removed entry.
+        if let Some(ref path) = output_path {
+            hist.unlink_file(path);
+        }
         hist.metadata.last_modified = chrono::Utc::now();
         hist.metadata.total_entries_current = hist.entries().len() as u32;
         history::save(&hist)?;
@@ -280,7 +284,7 @@ pub fn copy_history_entry_text(
         log::debug!("[IPC] copy_history_entry_text called (id: {})", entry_id);
     }
 
-    let hist = history.lock().unwrap();
+    let hist = crate::lock_or_recover!(history);
     let entry = hist
         .get_by_id(&entry_id)
         .ok_or_else(|| format!("History entry not found: {}", entry_id))?;
@@ -304,21 +308,23 @@ pub fn list_history(
         log::debug!("[IPC] list_history called");
     }
 
-    let hist = history.lock().unwrap();
-    let mut entries: Vec<HistoryEntry> = hist.entries().iter().cloned().collect();
+    let hist = crate::lock_or_recover!(history);
 
-    // Apply sorting
+    // Entries are stored oldest → newest; "newest" (the default) must reverse.
     let sort_order = options
         .as_ref()
         .and_then(|o| o.sort_order.as_deref())
         .unwrap_or("newest");
-    if sort_order == "oldest" { entries.reverse() }
 
-    // Apply pagination
+    // Paginate before cloning so we never clone all 1000 entries for one page.
     let limit = options.as_ref().and_then(|o| o.limit).unwrap_or(100);
     let offset = options.as_ref().and_then(|o| o.offset).unwrap_or(0);
 
-    entries.into_iter().skip(offset).take(limit).collect()
+    if sort_order == "oldest" {
+        hist.entries().iter().skip(offset).take(limit).cloned().collect()
+    } else {
+        hist.entries().iter().rev().skip(offset).take(limit).cloned().collect()
+    }
 }
 
 /// Search history with text and filter options
@@ -331,7 +337,7 @@ pub fn search_history(
         log::debug!("[IPC] search_history called");
     }
 
-    let hist = history.lock().unwrap();
+    let hist = crate::lock_or_recover!(history);
 
     let start_date = options.start_date.as_ref().and_then(|d| {
         chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d")
@@ -405,7 +411,7 @@ pub fn export_history(
         log::debug!("[IPC] export_history called (format: {:?})", format);
     }
 
-    let hist = history.lock().unwrap();
+    let hist = crate::lock_or_recover!(history);
     let entries: Vec<_> = hist.entries().iter().cloned().collect();
     let entry_count = entries.len();
 
@@ -460,7 +466,7 @@ pub fn get_history_unique_engines(history: State<'_, Mutex<HistoryLog>>) -> Vec<
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] get_history_unique_engines called");
     }
-    let hist = history.lock().unwrap();
+    let hist = crate::lock_or_recover!(history);
     hist.get_unique_engines()
 }
 
@@ -470,7 +476,7 @@ pub fn get_history_unique_voices(history: State<'_, Mutex<HistoryLog>>) -> Vec<S
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] get_history_unique_voices called");
     }
-    let hist = history.lock().unwrap();
+    let hist = crate::lock_or_recover!(history);
     hist.get_unique_voices()
 }
 
@@ -480,7 +486,7 @@ pub fn get_history_unique_tags(history: State<'_, Mutex<HistoryLog>>) -> Vec<Str
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] get_history_unique_tags called");
     }
-    let hist = history.lock().unwrap();
+    let hist = crate::lock_or_recover!(history);
     hist.get_unique_tags()
 }
 
@@ -490,7 +496,7 @@ pub fn get_history_date_range(history: State<'_, Mutex<HistoryLog>>) -> Option<(
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] get_history_date_range called");
     }
-    let hist = history.lock().unwrap();
+    let hist = crate::lock_or_recover!(history);
     hist.get_date_range().map(|(start, end)| {
         (
             start.format("%Y-%m-%d").to_string(),
@@ -556,7 +562,7 @@ pub fn get_history_batch(
         log::debug!("[IPC] get_history_batch called (batch_id: {})", batch_id);
     }
 
-    let hist = history.lock().unwrap();
+    let hist = crate::lock_or_recover!(history);
     let mut entries: Vec<HistoryEntry> = hist
         .entries()
         .iter()
@@ -580,7 +586,7 @@ pub fn delete_history_batch(
         log::debug!("[IPC] delete_history_batch called (batch_id: {})", batch_id);
     }
 
-    let mut hist = history.lock().unwrap();
+    let mut hist = crate::lock_or_recover!(history);
 
     // Collect IDs and paths to delete
     let to_delete: Vec<(String, Option<String>)> = hist
@@ -599,6 +605,13 @@ pub fn delete_history_batch(
     // Remove entries from history
     hist.entries_mut()
         .retain(|e| e.batch_id.as_deref() != Some(batch_id.as_str()));
+
+    // Keep file-tracking maps in sync with the removed entries.
+    for (_, output_path) in &to_delete {
+        if let Some(path) = output_path {
+            hist.unlink_file(path);
+        }
+    }
 
     hist.metadata.last_modified = chrono::Utc::now();
     hist.metadata.total_entries_current = hist.entries().len() as u32;
@@ -639,7 +652,7 @@ pub async fn play_history_batch(
 
     // Check if audio is already playing
     {
-        let p = player.lock().unwrap();
+        let p = crate::lock_or_recover!(player);
         if p.is_playing() {
             log::warn!("Cannot start batch playback: audio already playing");
             return Err(
@@ -650,7 +663,7 @@ pub async fn play_history_batch(
 
     // Get all entries for this batch, sorted by fragment_index
     let entries: Vec<HistoryEntry> = {
-        let hist = history.lock().unwrap();
+        let hist = crate::lock_or_recover!(history);
         let mut batch_entries: Vec<HistoryEntry> = hist
             .entries()
             .iter()

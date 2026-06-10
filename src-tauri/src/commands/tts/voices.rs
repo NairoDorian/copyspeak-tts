@@ -6,27 +6,31 @@ use tauri::State;
 
 /// List available ElevenLabs voices.
 /// Requires valid API key in config.
+/// Async + spawn_blocking: the fetch must not run on the main thread (UI
+/// freeze) or hold the config mutex across network IO (blocks the hot path).
 #[tauri::command]
-pub fn list_elevenlabs_voices(
+pub async fn list_elevenlabs_voices(
     config: State<'_, Mutex<AppConfig>>,
 ) -> Result<Vec<crate::tts::elevenlabs::ElevenLabsVoice>, String> {
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] list_elevenlabs_voices called");
     }
 
-    let cfg = config.lock().unwrap();
-    let backend = crate::tts::elevenlabs::ElevenLabsTtsBackend::new(cfg.tts.elevenlabs.clone());
-
-    match backend.list_voices() {
-        Ok(voices) => Ok(voices),
-        Err(e) => Err(format!("Failed to fetch voices: {}", e)),
-    }
+    let el_cfg = crate::lock_or_recover!(config).tts.elevenlabs.clone();
+    tokio::task::spawn_blocking(move || {
+        let backend = crate::tts::elevenlabs::ElevenLabsTtsBackend::new(el_cfg);
+        backend
+            .list_voices()
+            .map_err(|e| format!("Failed to fetch voices: {}", e))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 /// Get voice details by ID from ElevenLabs API.
 /// Useful for validating manually entered voice IDs.
 #[tauri::command]
-pub fn get_elevenlabs_voice_by_id(
+pub async fn get_elevenlabs_voice_by_id(
     voice_id: String,
     config: State<'_, Mutex<AppConfig>>,
 ) -> Result<crate::tts::elevenlabs::ElevenLabsVoice, String> {
@@ -34,13 +38,15 @@ pub fn get_elevenlabs_voice_by_id(
         log::debug!("[IPC] get_elevenlabs_voice_by_id called for: {}", voice_id);
     }
 
-    let cfg = config.lock().unwrap();
-    let backend = crate::tts::elevenlabs::ElevenLabsTtsBackend::new(cfg.tts.elevenlabs.clone());
-
-    match backend.get_voice_by_id(&voice_id) {
-        Ok(voice) => Ok(voice),
-        Err(e) => Err(format!("Failed to fetch voice: {}", e)),
-    }
+    let el_cfg = crate::lock_or_recover!(config).tts.elevenlabs.clone();
+    tokio::task::spawn_blocking(move || {
+        let backend = crate::tts::elevenlabs::ElevenLabsTtsBackend::new(el_cfg);
+        backend
+            .get_voice_by_id(&voice_id)
+            .map_err(|e| format!("Failed to fetch voice: {}", e))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 /// Get available ElevenLabs output formats for the frontend.

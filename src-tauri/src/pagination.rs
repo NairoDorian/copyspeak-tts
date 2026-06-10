@@ -214,7 +214,16 @@ pub fn paginate_text(text: &str, config: &PaginationConfig) -> Vec<TextFragment>
     if fragment_start < text.len() {
         let final_text = &text[fragment_start..];
         if !final_text.trim().is_empty() {
-            fragments.push(final_text.to_string());
+            // The trailing remainder can exceed max_size when punctuation is
+            // sparse — force-split it like the lone-fragment case above, or
+            // the entire text bypasses pagination (TTFA = full synthesis).
+            if final_text.chars().count() > max_size {
+                for sf in force_split(final_text, max_size) {
+                    fragments.push(sf.text);
+                }
+            } else {
+                fragments.push(final_text.to_string());
+            }
         }
     }
 

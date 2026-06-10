@@ -73,14 +73,6 @@ impl AudioPlayerInner {
         self.current_position = std::time::Duration::ZERO;
     }
 
-    fn is_playing(&self) -> bool {
-        self.sink.as_ref().is_some_and(|s| !s.empty())
-    }
-
-    fn is_paused(&self) -> bool {
-        self.sink.as_ref().is_some_and(|s| s.is_paused())
-    }
-
     fn toggle_pause(&mut self) {
         if let Some(ref sink) = self.sink {
             if sink.is_paused() {
@@ -160,76 +152,43 @@ pub struct AudioPlayer {
     currently_playing_entry_id: Arc<std::sync::Mutex<Option<String>>>,
 }
 
-// Explicitly implement Send and Sync since all fields are thread-safe
-unsafe impl Send for AudioPlayer {}
-unsafe impl Sync for AudioPlayer {}
-
 impl AudioPlayer {
-    pub fn new(app_handle: tauri::AppHandle) -> Self {
+    pub fn new() -> Self {
         let (tx, rx) = channel::<AudioCommand>();
         let is_playing = Arc::new(AtomicBool::new(false));
         let is_paused = Arc::new(AtomicBool::new(false));
         let playback_finished = Arc::new(AtomicBool::new(false));
         let currently_playing_entry_id = Arc::new(std::sync::Mutex::new(None));
-        let is_playing_clone = is_playing.clone();
-        let is_paused_clone = is_paused.clone();
-        let playback_finished_clone = playback_finished.clone();
-        let currently_playing_entry_id_clone = currently_playing_entry_id.clone();
 
+        // Playback happens in the webview's <audio> element; the frontend
+        // reports state via set_playback_state. This thread only services
+        // rodio safety-net commands, so it can block on recv().
         thread::spawn(move || {
             log::info!("Audio thread started");
             let mut player = AudioPlayerInner::new();
-            let mut prev_playing = false;
 
-            loop {
-                let now_playing = player.is_playing();
-                is_playing_clone.store(now_playing, Ordering::Relaxed);
-                is_paused_clone.store(player.is_paused(), Ordering::Relaxed);
-
-                // Detect state changes for the tray icon
-                if now_playing != prev_playing {
-                    crate::update_tray_icon(&app_handle);
-                }
-
-                // Detect playback finish (true -> false transition)
-                if prev_playing && !now_playing {
-                    log::info!("Playback finished");
-                    playback_finished_clone.store(true, Ordering::Relaxed);
-                    // Clear currently playing entry ID when playback finishes
-                    if let Ok(mut entry_id) = currently_playing_entry_id_clone.lock() {
-                        *entry_id = None;
+            while let Ok(cmd) = rx.recv() {
+                match cmd {
+                    AudioCommand::Stop => {
+                        player.stop();
                     }
-                }
-                prev_playing = now_playing;
-
-                match rx.recv_timeout(std::time::Duration::from_millis(200)) {
-                    Ok(cmd) => match cmd {
-                        AudioCommand::Stop => {
-                            player.stop();
+                    AudioCommand::TogglePause => {
+                        player.toggle_pause();
+                    }
+                    AudioCommand::SetMode(mode) => {
+                        player.set_mode(mode);
+                    }
+                    AudioCommand::SetVolume(volume) => {
+                        player.set_volume(volume);
+                    }
+                    AudioCommand::SeekRelative(seconds) => {
+                        if seconds >= 0 {
+                            player.seek_relative(std::time::Duration::from_secs(seconds as u64));
+                        } else {
+                            player.seek_relative(std::time::Duration::from_secs(
+                                (-seconds) as u64,
+                            ));
                         }
-                        AudioCommand::TogglePause => {
-                            player.toggle_pause();
-                        }
-                        AudioCommand::SetMode(mode) => {
-                            player.set_mode(mode);
-                        }
-                        AudioCommand::SetVolume(volume) => {
-                            player.set_volume(volume);
-                        }
-                        AudioCommand::SeekRelative(seconds) => {
-                            if seconds >= 0 {
-                                player
-                                    .seek_relative(std::time::Duration::from_secs(seconds as u64));
-                            } else {
-                                player.seek_relative(std::time::Duration::from_secs(
-                                    (-seconds) as u64,
-                                ));
-                            }
-                        }
-                    },
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                        break;
                     }
                 }
             }
@@ -241,6 +200,21 @@ impl AudioPlayer {
             is_paused,
             playback_finished,
             currently_playing_entry_id,
+        }
+    }
+
+    /// Update playback state as reported by the frontend audio element.
+    /// Drives the tray busy icon, tray click behavior, and HUD auto-hide,
+    /// which were dead while the state only tracked the unused rodio sink.
+    pub fn set_playback_state_reported(&self, playing: bool, paused: bool) {
+        let was_playing = self.is_playing.swap(playing, Ordering::Relaxed);
+        self.is_paused.store(paused, Ordering::Relaxed);
+        if was_playing && !playing {
+            log::info!("Playback finished (frontend report)");
+            self.playback_finished.store(true, Ordering::Relaxed);
+            if let Ok(mut entry_id) = self.currently_playing_entry_id.lock() {
+                *entry_id = None;
+            }
         }
     }
 
