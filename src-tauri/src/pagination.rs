@@ -222,6 +222,9 @@ pub fn paginate_text(text: &str, config: &PaginationConfig) -> Vec<TextFragment>
         return vec![TextFragment::new(text.to_string(), 0, 1)];
     }
 
+    // Safety net: filter out empty/whitespace-only fragments (H1)
+    fragments.retain(|f| !f.trim().is_empty());
+
     let total = fragments.len();
     fragments
         .into_iter()
@@ -251,9 +254,12 @@ fn force_split(text: &str, max_size: usize) -> Vec<TextFragment> {
             }
         }
         let fragment = &text[byte_start..byte_end];
-        fragments.push(TextFragment::new(fragment.trim().to_string(), index, 0));
+        let trimmed = fragment.trim().to_string();
+        if !trimmed.is_empty() {
+            fragments.push(TextFragment::new(trimmed, index, 0));
+            index += 1;
+        }
         byte_start = byte_end;
-        index += 1;
     }
 
     let total = fragments.len();
@@ -980,5 +986,66 @@ mod tests {
         assert_eq!(adaptive_fragment_size(&config, 0.5), 600);
         // Slow (<= 0.3 chars/ms) -> base = 300
         assert_eq!(adaptive_fragment_size(&config, 0.2), 300);
+    }
+
+    // ── H1: Empty fragment regression tests ──────────────────────────────────
+
+    fn cfg(size: u32) -> PaginationConfig {
+        PaginationConfig { enabled: true, fragment_size: size }
+    }
+
+    #[test]
+    fn no_empty_or_whitespace_fragments_at_any_size() {
+        for t in [
+            "Hi! Ok.",
+            "A. B. C.",
+            "One? Two!",
+            "Hi!  Double space. End.",
+            "Hello 👨‍👩‍👧‍👦 world! Done 🎉. Next!",
+        ] {
+            for size in [1u32, 2, 3, 5, 10, 50, 500] {
+                for f in paginate_text(t, &cfg(size)) {
+                    assert!(
+                        !f.text.trim().is_empty(),
+                        "empty fragment: text={t:?} size={size} frags={:?}",
+                        paginate_text(t, &cfg(size))
+                            .iter()
+                            .map(|x| x.text.clone())
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_character_loss_any_size_unicode() {
+        let t = "First. वाक्य दो। Третье! 四番目の文。Fifth? Mr. Smith. $3.50 today. e.g. this.";
+        let norm = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        for size in [1u32, 8, 25, 60, 200, 500] {
+            let re: String = paginate_text(t, &cfg(size))
+                .iter()
+                .map(|f| f.text.as_str())
+                .collect();
+            assert_eq!(norm(&re), norm(t), "char loss at size {size}");
+        }
+    }
+
+    #[test]
+    fn zwj_emoji_4byte_combining_never_panic() {
+        let cases = [
+            "👨‍👩‍👧‍👦!",
+            "Music 𝄞? Done 🎉.",
+            "Wait.\u{0301} Next. e\u{0301}toile!",
+            "。",
+            "！",
+            "...",
+            "e.g.",
+        ];
+        for t in cases {
+            for s in [1u32, 4, 100] {
+                let _ = paginate_text(t, &cfg(s));
+            }
+        }
     }
 }

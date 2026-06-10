@@ -86,7 +86,7 @@ pub(super) fn parse_wav_header(bytes: &[u8]) -> Result<WavInfo, String> {
             }
         }
 
-        offset += 8 + chunk_size;
+        offset += 8 + chunk_size + (chunk_size & 1); // RIFF spec: odd-sized chunks have a pad byte
     }
 
     if sample_rate == 0 || channels == 0 || bits_per_sample == 0 {
@@ -342,15 +342,40 @@ pub fn concat_wav_files(wavs: Vec<Vec<u8>>) -> Result<Vec<u8>, String> {
     // Everything before the "data" chunk identifier (RIFF header + fmt chunk + other chunks)
     let prefix_end = first_data_offset - 8; // back up past "data" (4) + data_size (4)
 
-    // Collect raw PCM from all fragments, using declared data_size to avoid trailing chunks
+    // Collect raw PCM from all fragments, validating format consistency (M1)
     let mut all_pcm: Vec<u8> = first[first_data_offset..first_data_end].to_vec();
     for (idx, wav) in wavs[1..].iter().enumerate() {
         match parse_wav_header(wav) {
             Ok(info) => {
+                // Validate format compatibility — mismatched rates silently corrupt output
+                if info.sample_rate != first_info.sample_rate {
+                    return Err(format!(
+                        "Fragment {} is {} Hz, expected {} Hz. All fragments must share the same sample rate.",
+                        idx + 2,
+                        info.sample_rate,
+                        first_info.sample_rate
+                    ));
+                }
+                if info.channels != first_info.channels {
+                    return Err(format!(
+                        "Fragment {} has {} channel(s), expected {}. All fragments must share the same channel count.",
+                        idx + 2,
+                        info.channels,
+                        first_info.channels
+                    ));
+                }
+                if info.bits_per_sample != first_info.bits_per_sample {
+                    return Err(format!(
+                        "Fragment {} is {}-bit, expected {}-bit. All fragments must share the same bit depth.",
+                        idx + 2,
+                        info.bits_per_sample,
+                        first_info.bits_per_sample
+                    ));
+                }
                 let end = (info.data_offset + info.data_size).min(wav.len());
                 all_pcm.extend_from_slice(&wav[info.data_offset..end]);
             }
-            Err(_) => log::warn!("[Audio] Fragment {} is not a valid WAV, skipping", idx + 1),
+            Err(_) => log::warn!("[Audio] Fragment {} is not a valid WAV, skipping", idx + 2),
         }
     }
 

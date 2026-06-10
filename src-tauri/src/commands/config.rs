@@ -101,11 +101,19 @@ pub fn set_config(
     let listen_enabled_changed = old_listen_enabled != new_config.trigger.listen_enabled;
     let hotkey_changed = old_hotkey != new_config.hotkey;
 
+    // R5(b): Restart is keyed only on command or cuda changes. Voice changes
+    // don't need a restart — the Piper HTTP server lazy-loads voices per request.
+    // Preset changes from piper→piper don't need a restart either.
     let piper_server_changed = old_tts_config.command != new_config.tts.command
-        || old_tts_config.voice != new_config.tts.voice
-        || old_tts_config.cuda != new_config.tts.cuda
-        || old_tts_config.preset != new_config.tts.preset
-        || old_tts_config.active_backend != new_config.tts.active_backend;
+        || old_tts_config.cuda != new_config.tts.cuda;
+
+    // R5(a): Unload on switching away from Piper so the model doesn't linger in
+    // RAM/VRAM. Toggling from piper to another engine releases the resources.
+    let was_piper_active = old_tts_config.active_backend == crate::config::TtsEngine::Local
+        && old_tts_config.preset == "piper";
+    let is_piper_active = new_config.tts.active_backend == crate::config::TtsEngine::Local
+        && new_config.tts.preset == "piper";
+    let switched_away_from_piper = was_piper_active && !is_piper_active;
 
     if crate::logging::is_debug_mode() {
         log::debug!(
@@ -120,10 +128,7 @@ pub fn set_config(
     }
 
     let listen_enabled_value = new_config.trigger.listen_enabled;
-    let tts_for_server = if piper_server_changed
-        && new_config.tts.active_backend == crate::config::TtsEngine::Local
-        && new_config.tts.preset == "piper"
-    {
+    let tts_for_server = if piper_server_changed && is_piper_active {
         Some(new_config.tts.clone())
     } else {
         None
@@ -198,6 +203,13 @@ pub fn set_config(
             data_dir,
             tts_cfg.cuda,
         );
+    }
+
+    // R5(a): Unload Piper model when switching away (e.g., to OpenAI)
+    // so hundreds of MB of RAM/VRAM aren't held for a backend that isn't active.
+    if switched_away_from_piper {
+        log::info!("[Piper] Switched away from Piper — unloading model");
+        crate::tts::cli::unload_piper_model_internal();
     }
 
     // Emit config-changed event so frontend can react

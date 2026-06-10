@@ -755,6 +755,7 @@ pub async fn play_history_batch(
                 fragment_total: total,
                 is_final: index == total - 1,
                 text: text_preview,
+                duration_ms: None,
             },
         );
 

@@ -56,12 +56,12 @@ fn log_tts_debug(tag: &str, backend: &str, text: &str) {
     }
 }
 
-/// Synthesize audio using spawn_blocking
+// Speed is a playback-only concept. Synthesis always uses 1.0 normal rate;
+// the frontend applies speed via playbackRate on the <audio> element.
 async fn synthesize_async(
     backend: Arc<Box<dyn TtsBackend>>,
     text: String,
     voice: String,
-    _speed: f32,
 ) -> Result<Vec<u8>, String> {
     tokio::task::spawn_blocking(move || backend.synthesize(&text, &voice, 1.0))
         .await
@@ -153,6 +153,7 @@ async fn emit_audio_fragment(
     index: usize,
     total: usize,
     text: String,
+    duration_ms: Option<u64>,
 ) {
     use base64::{engine::general_purpose, Engine as _};
     let wav = wav_bytes.to_vec();
@@ -169,6 +170,7 @@ async fn emit_audio_fragment(
             fragment_total: total,
             is_final,
             text: text_preview,
+            duration_ms,
         },
     ) {
         log::warn!("Failed to emit audio-fragment-ready: {}", e);
@@ -184,6 +186,7 @@ fn spawn_fragment_emit(
     index: usize,
     total: usize,
     text: String,
+    duration_ms: Option<u64>,
 ) -> tokio::task::JoinHandle<()> {
     use base64::{engine::general_purpose, Engine as _};
     let wav = wav_bytes.to_vec();
@@ -200,6 +203,7 @@ fn spawn_fragment_emit(
                 fragment_total: total,
                 is_final,
                 text: text_preview,
+                duration_ms,
             },
         ) {
             log::warn!("Failed to emit audio-fragment-ready: {}", e);
@@ -259,7 +263,7 @@ pub async fn speak_now(
     // Enter critical section for TTS synthesis
     let _synthesis_guard = SynthesisGuard::new(&app);
 
-    let (active_backend, tts_config, output_config, pagination_config, post_process_config, playback_speed) = {
+    let (active_backend, tts_config, output_config, pagination_config, post_process_config) = {
         let cfg = crate::lock_or_recover!(config);
         (
             cfg.tts.active_backend.clone(),
@@ -267,7 +271,6 @@ pub async fn speak_now(
             cfg.output.clone(),
             cfg.pagination.clone(),
             cfg.post_process.clone(),
-            cfg.playback.playback_speed,
         )
     };
 
@@ -341,7 +344,7 @@ pub async fn speak_now(
                     "[TTS] Found cached history entry but failed to read audio file: {}. Re-synthesizing.",
                     e
                 );
-                synthesize_async(backend_arc.clone(), text.clone(), voice.clone(), playback_speed).await?
+                synthesize_async(backend_arc.clone(), text.clone(), voice.clone()).await?
             }
         }
     } else if pagination::should_paginate(&text, &pagination_config) && !output_config.enabled {
@@ -355,14 +358,11 @@ pub async fn speak_now(
             &telemetry_state,
             &synthesis_start,
             &pagination_config,
-            playback_speed,
-            estimated_ms,
-            confidence,
         )
         .await?
     } else {
         // Simple synthesis
-        synthesize_async(backend_arc.clone(), text.clone(), voice.clone(), playback_speed).await?
+        synthesize_async(backend_arc.clone(), text.clone(), voice.clone()).await?
     };
 
     let synthesis_duration = synthesis_start.elapsed();
@@ -425,15 +425,11 @@ async fn synthesize_paginated(
     telemetry_state: &State<'_, Mutex<telemetry::TelemetryLog>>,
     synthesis_start: &Instant,
     pagination_config: &crate::config::PaginationConfig,
-    speed: f32,
-    _total_estimate: Option<u64>,
-    _avg_confidence: f32,
 ) -> Result<Vec<u8>, String> {
     let fragments = pagination::paginate_text(text, pagination_config);
 
     if fragments.len() <= 1 {
-        // Only one fragment — fall back to normal synthesis
-        return synthesize_async(backend_arc.clone(), text.to_string(), voice.to_string(), speed).await;
+        return synthesize_async(backend_arc.clone(), text.to_string(), voice.to_string()).await;
     }
 
     log::info!(
@@ -485,7 +481,6 @@ async fn synthesize_paginated(
             backend_arc.clone(),
             fragment.text.clone(),
             voice.to_string(),
-            speed,
         )
         .await
         .map_err(|e| format!("Fragment {} synthesis failed: {}", i + 1, e))?;
@@ -663,14 +658,13 @@ pub async fn speak_queued(
     // Clear any previous abort request
     crate::ABORT_REQUESTED.store(false, Ordering::Relaxed);
 
-    let (active_backend, tts_config, mut pagination_config, post_process_config, playback_speed) = {
+    let (active_backend, tts_config, mut pagination_config, post_process_config) = {
         let cfg = crate::lock_or_recover!(config);
         (
             cfg.tts.active_backend.clone(),
             cfg.tts.clone(),
             cfg.pagination.clone(),
             cfg.post_process.clone(),
-            cfg.playback.playback_speed,
         )
     };
 
@@ -797,7 +791,7 @@ pub async fn speak_queued(
     );
 
     // Parallel synthesis for cloud backends with multiple fragments
-    if is_parallel_capable && fragments.len() > 1 {
+    let queued_result = if is_parallel_capable && fragments.len() > 1 {
         synthesize_queued_parallel(
             &app,
             backend_arc,
@@ -812,11 +806,9 @@ pub async fn speak_queued(
             &tts_config,
             &active_backend,
             &batch_id,
-            playback_speed,
         )
-        .await;
+        .await
     } else {
-        // Sequential synthesis for CLI backends or single fragments
         synthesize_queued_sequential(
             &app,
             backend_arc,
@@ -836,10 +828,9 @@ pub async fn speak_queued(
             total_estimate,
             avg_confidence,
             total_chars,
-            playback_speed,
         )
-        .await?;
-    }
+        .await
+    };
 
     // Clear queue (frontend handles streaming)
     {
@@ -847,17 +838,31 @@ pub async fn speak_queued(
         q.clear();
     }
 
-    log::info!("[Queue] All {} fragments synthesized and streamed", total);
-
-    // Emit pagination complete event
-    let _ = app.emit(
-        "pagination:complete",
-        PaginationEvent {
-            total,
-            current_index: total - 1,
-            is_paginated: total > 1,
-        },
-    );
+    match queued_result {
+        Ok(()) => {
+            log::info!("[Queue] All {} fragments synthesized and streamed", total);
+            let _ = app.emit(
+                "pagination:complete",
+                PaginationEvent {
+                    total,
+                    current_index: total - 1,
+                    is_paginated: total > 1,
+                },
+            );
+        }
+        Err(e) => {
+            log::error!("[Queue] Synthesis failed: {}", e);
+            let _ = app.emit(
+                "pagination:failed",
+                PaginationEvent {
+                    total,
+                    current_index: 0,
+                    is_paginated: total > 1,
+                },
+            );
+            return Err(e);
+        }
+    }
 
     Ok(())
 }
@@ -885,7 +890,6 @@ async fn synthesize_queued_sequential(
     total_estimate: Option<u64>,
     avg_confidence: f32,
     total_chars: usize,
-    speed: f32,
 ) -> Result<(), String> {
     let mut pending_emit: Option<tokio::task::JoinHandle<()>> = None;
 
@@ -921,7 +925,7 @@ async fn synthesize_queued_sequential(
 
         let fragment_start = Instant::now();
         let wav_bytes =
-            synthesize_async(backend_arc.clone(), fragment.text.clone(), voice.to_string(), speed).await?;
+            synthesize_async(backend_arc.clone(), fragment.text.clone(), voice.to_string()).await?;
         let fragment_duration = fragment_start.elapsed();
 
         record_telemetry(telemetry_state, engine_str_val, voice, fragment.text.chars().count(), fragment_duration.as_millis() as u64);
@@ -961,7 +965,7 @@ async fn synthesize_queued_sequential(
         if let Some(handle) = pending_emit.take() {
             let _ = handle.await;
         }
-        pending_emit = Some(spawn_fragment_emit(app, &wav_bytes, index, total, fragment.text.clone()));
+        pending_emit = Some(spawn_fragment_emit(app, &wav_bytes, index, total, fragment.text.clone(), Some(envelope.duration_ms)));
 
         let _ = app.emit(
             "pagination:fragment-ready",
@@ -1004,8 +1008,7 @@ async fn synthesize_queued_parallel(
     tts_config: &crate::config::TtsConfig,
     active_backend: &crate::config::TtsEngine,
     batch_id: &Option<String>,
-    speed: f32,
-) {
+) -> Result<(), String> {
     use tokio::task::JoinSet;
     const MAX_CONCURRENT: usize = 3;
 
@@ -1044,7 +1047,7 @@ async fn synthesize_queued_parallel(
 
             join_set.spawn(async move {
                 let start = Instant::now();
-                let wav_bytes = synthesize_async(backend, text, voice, speed).await;
+                let wav_bytes = synthesize_async(backend, text, voice).await;
                 let duration_ms = start.elapsed().as_millis() as u64;
                 match wav_bytes {
                     Ok(bytes) => Ok((idx as u32, fragment, bytes, duration_ms)),
@@ -1078,6 +1081,14 @@ async fn synthesize_queued_parallel(
                     }
                     Some(Err(e)) => {
                         log::error!("[Queue] JoinSet task panicked: {}", e);
+                        // Store a synthetic error so the post-loop check catches it.
+                        // We don't know which index panicked, but we know the batch is broken.
+                        for i in 0..total_frags {
+                            if per_fragment_wavs[i].is_none() && per_fragment_errors[i].is_none() {
+                                per_fragment_errors[i] = Some(format!("Task panicked: {}", e));
+                                break;
+                            }
+                        }
                     }
                     None => {}
                 }
@@ -1157,7 +1168,7 @@ async fn synthesize_queued_parallel(
                     true,
                 );
 
-                emit_audio_fragment(app, wav_bytes, emit_cursor, total, fragment.text.clone()).await;
+                emit_audio_fragment(app, wav_bytes, emit_cursor, total, fragment.text.clone(), Some(envelope.duration_ms)).await;
 
                 let _ = app.emit(
                     "pagination:fragment-ready",
@@ -1187,11 +1198,26 @@ async fn synthesize_queued_parallel(
         }
     }
 
-    // Save history once after all batch fragments
+    // Save history once after all batch fragments (only on success)
     let hist = crate::lock_or_recover!(history);
     let _ = crate::history::save(&hist);
     drop(hist);
     let _ = app.emit("history-updated", ());
+
+    // Check for errors after the loop — a failed fragment or panicked task
+    // means the batch did not complete cleanly.
+    for (i, err_opt) in per_fragment_errors.iter().enumerate() {
+        if let Some(err) = err_opt {
+            return Err(format!("Fragment {} synthesis failed: {}", i + 1, err));
+        }
+    }
+    // If the emit_cursor was left behind (e.g., JoinSet panic with no error stored),
+    // we also treat as incomplete.
+    if emit_cursor < total_frags && !is_aborted {
+        return Err("Synthesis incomplete: some fragments were never produced".to_string());
+    }
+
+    Ok(())
 }
 
 // ── speak_history_entry ─────────────────────────────────────────────────────
@@ -1229,9 +1255,9 @@ pub async fn speak_history_entry(
     // Clear any previous abort request
     crate::ABORT_REQUESTED.store(false, Ordering::Relaxed);
 
-    let (active_backend, tts_config, playback_speed) = {
+    let (active_backend, tts_config) = {
         let cfg = crate::lock_or_recover!(config);
-        (cfg.tts.active_backend.clone(), cfg.tts.clone(), cfg.playback.playback_speed)
+        (cfg.tts.active_backend.clone(), cfg.tts.clone())
     };
 
     let backend: Box<dyn TtsBackend> = create_backend(&active_backend, &tts_config);
@@ -1266,7 +1292,7 @@ pub async fn speak_history_entry(
     let synthesis_start = Instant::now();
 
     // Synthesize
-    let wav_bytes = synthesize_async(backend_arc.clone(), text.clone(), voice.clone(), playback_speed).await?;
+    let wav_bytes = synthesize_async(backend_arc.clone(), text.clone(), voice.clone()).await?;
     let synthesis_ms = synthesis_start.elapsed().as_millis() as u64;
 
     // Record telemetry

@@ -222,14 +222,16 @@ pub struct CliTtsBackend {
     pub command: String,
     pub args_template: Vec<String>,
     pub cuda: bool,
+    pub preset: String,
 }
 
 impl CliTtsBackend {
-    pub fn new(command: String, args_template: Vec<String>, cuda: bool) -> Self {
+    pub fn new(command: String, args_template: Vec<String>, cuda: bool, preset: String) -> Self {
         Self {
             command,
             args_template,
             cuda,
+            preset,
         }
     }
 
@@ -245,10 +247,10 @@ impl CliTtsBackend {
         is_kokoro && (!has_model_arg || !has_voices_arg)
     }
 
-    /// Check if this is piper TTS
+    /// Check if this is piper TTS — uses ground-truth preset, not a substring
+    /// heuristic over the command name (which could match "bagpiper", etc.).
     fn is_piper(&self) -> bool {
-        let cmd_lower = self.command.to_lowercase();
-        cmd_lower.contains("piper") || self.args_template.iter().any(|arg| arg.contains("piper"))
+        self.preset == "piper"
     }
 
     /// Find kokoro-tts model files in common locations
@@ -373,9 +375,27 @@ impl CliTtsBackend {
             .into_owned()
     }
 
-    fn synthesize_via_server(&self, text: &str, voice: &str, speed: f32) -> Result<Vec<u8>, TtsError> {
+    fn synthesize_via_server(&self, text: &str, voice: &str, _speed: f32) -> Result<Vec<u8>, TtsError> {
         let data_dir = Self::data_dir();
         let t_total = std::time::Instant::now();
+
+        // R6: Pre-flight check — verify the voice model exists before talking to
+        // the server. Piper's HTTP server silently falls back to its default voice
+        // (HTTP 200) for unknown voices, so without this check the user hears the
+        // wrong voice with no error.
+        let voice_stem = if voice.ends_with(".onnx") {
+            voice.trim_end_matches(".onnx").to_string()
+        } else {
+            voice.to_string()
+        };
+        let model_path = std::path::Path::new(&data_dir).join(format!("{}.onnx", voice_stem));
+        if !model_path.exists() && !std::path::Path::new(voice).exists() {
+            return Err(TtsError::CommandFailed(format!(
+                "Piper voice model not found: {voice}\n\n\
+                 Download it with:\n  python -m piper.download_voices {voice}\n\n\
+                 Then place the .onnx and .onnx.json files in:\n  {data_dir}",
+            )));
+        }
 
         // 1. Ensure server is running and get handle
         let handle = crate::tts::piper_server::ensure_running(
@@ -386,16 +406,26 @@ impl CliTtsBackend {
         ).map_err(TtsError::Server)?;
 
         // 2. HTTP synthesis request
+        // Speed is a playback-only concept; always synthesize at 1.0 normal rate.
+        // The frontend applies speed via playbackRate on the <audio> element.
         let url = format!("http://127.0.0.1:{}/", handle.port);
-        let body = serde_json::json!({ "text": text, "voice": voice, "length_scale": speed });
+        let body = serde_json::json!({ "text": text, "voice": voice, "length_scale": 1.0 });
+
+        // R3: Adaptive request deadline — scales with text length so legitimate
+        // long synthesis isn't killed, but a wedged server doesn't hold the queue
+        // forever (H2 improvement over connect-only timeout).
+        let text_chars = text.chars().count() as u64;
+        let per_char_ms = if self.cuda { 5 } else { 30 };
+        let deadline_ms = (5000u64 + text_chars * per_char_ms).clamp(10_000, 180_000);
+        let deadline = std::time::Duration::from_millis(deadline_ms);
 
         let t_req = std::time::Instant::now();
         let response = handle.client
             .post(&url)
+            .timeout(deadline)
             .json(&body)
             .send()
             .map_err(|e| {
-                // H2: On connection or timeout failure, mark server unhealthy (unload)
                 let _ = crate::tts::piper_server::unload_piper_model();
                 TtsError::Server(format!("HTTP request failed: {}", e))
             })?;
@@ -410,14 +440,19 @@ impl CliTtsBackend {
         let t_read = std::time::Instant::now();
         let bytes = response
             .bytes()
-            .map_err(|e| TtsError::Server(format!("Failed to read response bytes: {}", e)))?
+            .map_err(|e| {
+                // R3: Mid-stream read error → dying server. Unload so next
+                // attempt gets a fresh process rather than talking to a zombie.
+                let _ = crate::tts::piper_server::unload_piper_model();
+                TtsError::Server(format!("Failed to read response bytes: {}", e))
+            })?
             .to_vec();
         let read_ms = t_read.elapsed().as_millis();
 
         let total_ms = t_total.elapsed().as_millis();
         log::info!(
-            "[Piper] Synth — total:{:.0}ms req:{:.0}ms read:{:.0}ms size:{}B chars:{} speed:{:.1} voice:{} cuda:{}",
-            total_ms, req_ms, read_ms, bytes.len(), text.len(), speed, voice, self.cuda
+            "[Piper] Synth — total:{:.0}ms req:{:.0}ms read:{:.0}ms size:{}B chars:{} speed:1.0 voice:{} cuda:{}",
+            total_ms, req_ms, read_ms, bytes.len(), text.len(), voice, self.cuda
         );
 
         Ok(bytes)
@@ -664,6 +699,29 @@ impl TtsBackend for CliTtsBackend {
             self.command == "py" || self.command == "python" || self.command.starts_with("python");
 
         if is_python {
+            // H5: Piper fast path — if the persistent server is already running, a
+            // quick ping is sufficient. No need to spawn a full CLI synthesis
+            // (seconds of model load) for a health check.
+            if self.is_piper() {
+                let status = crate::tts::piper_server::get_piper_server_status();
+                if status.ready {
+                    if let Some(port) = status.port {
+                        let client = reqwest::blocking::Client::builder()
+                            .timeout(std::time::Duration::from_secs(2))
+                            .build()
+                            .map_err(|e| TtsError::Unavailable(format!("Failed to build health client: {e}")))?;
+                        let url = format!("http://127.0.0.1:{}/voices", port);
+                        if client.get(&url).send().is_ok() {
+                            return Ok(());
+                        }
+                    }
+                }
+                if status.running {
+                    return Ok(()); // Server is starting — making progress
+                }
+                // Server is Stopped — fall through to cheap probe below
+            }
+
             // For Python, we need to validate the full command with the script
             // Build args similar to synthesize, but use a test text
             let test_text = "test";
@@ -869,6 +927,7 @@ mod tests {
                 "{voice}".into(),
             ],
             false,
+            "test".into(),
         );
         let args = backend.build_args("/tmp/input.txt", "/tmp/out.wav", "af_heart", "hello world");
         assert_eq!(
@@ -884,6 +943,7 @@ mod tests {
             "test-tts".into(),
             vec!["{text}".into(), "{output}".into()],
             false,
+            "test".into(),
         );
         let args = backend.build_args("/tmp/input.txt", "/tmp/out.wav", "af_heart", "hello world");
         assert_eq!(args, vec!["/tmp/input.txt", "/tmp/out.wav"]);
@@ -891,7 +951,7 @@ mod tests {
 
     #[test]
     fn test_voice_display_name_extracts_middle_segment() {
-        let backend = CliTtsBackend::new("piper".into(), vec![], false);
+        let backend = CliTtsBackend::new("piper".into(), vec![], false, "piper".into());
 
         // Piper voice format: en_US-joe-medium
         assert_eq!(backend.voice_display_name("en_US-joe-medium"), "joe");
@@ -906,11 +966,11 @@ mod tests {
     fn test_piper_request_body_serialization() {
         let text = "Hello world";
         let voice = "en_US-joe-medium";
-        let speed = 1.0;
-        let body = serde_json::json!({ "text": text, "voice": voice, "length_scale": speed });
+        // Speed is playback-only; synthesis always uses length_scale: 1.0
+        let body = serde_json::json!({ "text": text, "voice": voice, "length_scale": 1.0 });
         assert_eq!(body["text"], text);
         assert_eq!(body["voice"], voice);
-        assert_eq!(body["length_scale"], speed);
+        assert_eq!(body["length_scale"], 1.0);
     }
 }
 

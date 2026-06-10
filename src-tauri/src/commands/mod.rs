@@ -51,4 +51,7 @@ pub struct AudioFragmentEvent {
     pub is_final: bool,
     /// Text being spoken in this fragment
     pub text: String,
+    /// Duration in milliseconds (parsed from WAV header, no decode needed)
+    /// Enables the frontend to skip decodeAudioData when pitch==1 && !effect
+    pub duration_ms: Option<u64>,
 }

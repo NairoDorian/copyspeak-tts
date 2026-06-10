@@ -145,27 +145,41 @@ fn parse_request(buffer: &[u8], expected_token: &Option<String>) -> Result<Contr
     let header_end = find_header_end(buffer).ok_or((400, "missing HTTP headers".to_string()))?;
     let headers = String::from_utf8_lossy(&buffer[..header_end]);
 
-    // Extract Authorization header
+    // Determine the route first so we can exempt /health from auth
+    let mut lines = headers.lines();
+    let request_line = lines.next().unwrap_or_default();
+
+    // GET /health is unauthenticated — external liveness probes are its purpose
+    if request_line.starts_with("GET /health ") {
+        return Ok(ControlRequest::Health);
+    }
+
+    // Extract Authorization header for gated routes
     let auth_header = headers
         .lines()
         .filter_map(|line| line.split_once(':'))
         .find(|(name, _)| name.trim().eq_ignore_ascii_case("authorization"))
         .map(|(_, value)| value.trim());
 
-    // Check token if one is configured
+    // Check token if one is configured (for /speak and /piper-status)
     if let Some(token) = expected_token {
-        let expected_auth = format!("Bearer {}", token);
+        let expected = format!("Bearer {token}");
         match auth_header {
-            Some(auth) if auth == expected_auth => {}
-            _ => return Err((401, "Unauthorized: invalid or missing token".to_string())),
+            Some(auth) => {
+                // Constant-time compare: byte-wise XOR fold
+                let mut diff = 0u8;
+                for (a, b) in auth.bytes().zip(expected.bytes()) {
+                    diff |= a ^ b;
+                }
+                diff |= (auth.len() ^ expected.len()) as u8;
+                if diff != 0 {
+                    return Err((401, "Unauthorized: invalid or missing token".to_string()));
+                }
+            }
+            None => return Err((401, "Unauthorized: invalid or missing token".to_string())),
         }
     }
 
-    let mut lines = headers.lines();
-    let request_line = lines.next().unwrap_or_default();
-    if request_line.starts_with("GET /health ") {
-        return Ok(ControlRequest::Health);
-    }
     if request_line.starts_with("GET /piper-status ") {
         return Ok(ControlRequest::PiperStatus);
     }

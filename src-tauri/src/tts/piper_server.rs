@@ -67,7 +67,7 @@ fn get_free_port() -> Option<u16> {
 }
 
 #[cfg(windows)]
-fn get_nvidia_dll_paths(python_executable: &str) -> Option<String> {
+pub(crate) fn get_nvidia_dll_paths(python_executable: &str) -> Option<String> {
     static NVIDIA_PATHS: OnceLock<Option<String>> = OnceLock::new();
     NVIDIA_PATHS
         .get_or_init(|| {
@@ -326,9 +326,12 @@ pub fn ensure_running(
         match &mut *state {
             ServerState::Ready(server) => {
                 let active = server.clone();
-                drop(state); // drop lock before calling child method
+                drop(state);
 
-                let is_alive = matches!(active.child.lock().unwrap_or_else(|p| p.into_inner()).try_wait(), Ok(None));
+                let is_alive = matches!(
+                    active.child.lock().unwrap_or_else(|p| p.into_inner()).try_wait(),
+                    Ok(None)
+                );
                 if is_alive && active.cuda == cuda {
                     return Ok(ServerHandle {
                         port: active.port,
@@ -339,21 +342,23 @@ pub fn ensure_running(
                     // Re-verify under lock in case someone changed it
                     if let ServerState::Ready(curr) = &*state {
                         if Arc::ptr_eq(curr, &active) {
-                            log::info!("[Piper] Killing dead/mismatched server on port {}", active.port);
-                            let server_owned = Arc::try_unwrap(active).ok().unwrap_or_else(|| {
-                                // Fallback if still referenced
-                                ActiveServer {
-                                    child: Mutex::new(Command::new("cmd").spawn().unwrap()), // dummy
-                                    port: 0,
-                                    model_name: "".to_string(),
-                                    cuda: false,
-                                    client: get_piper_client().clone(),
-                                }
-                            });
-                            if server_owned.port != 0 {
-                                let _ = server_owned.child.lock().unwrap_or_else(|p| p.into_inner()).kill();
-                                let _ = server_owned.child.lock().unwrap_or_else(|p| p.into_inner()).wait();
+                            log::info!(
+                                "[Piper] Killing dead/mismatched server on port {}",
+                                active.port
+                            );
+                            // Kill through the Mutex — no try_unwrap, no dummy process.
+                            // This works even if other threads still hold Arc clones.
+                            {
+                                let mut child = active
+                                    .child
+                                    .lock()
+                                    .unwrap_or_else(|p| p.into_inner());
+                                let _ = child.kill();
+                                let _ = child.wait(); // reap to avoid zombies on Unix
                             }
+                            // Bump the generation: any Starting thread racing in
+                            // cannot resurrect the same configuration unobserved.
+                            CURRENT_GENERATION.fetch_add(1, Ordering::SeqCst);
                             *state = ServerState::Stopped;
                         }
                     }
@@ -412,25 +417,27 @@ pub fn ensure_running(
 
 pub fn unload_piper_model() -> bool {
     let mut state = get_server_state().lock().unwrap_or_else(|p| p.into_inner());
-    if let ServerState::Ready(server) = &*state {
-        log::info!("[Piper] Unloading model on port {}", server.port);
-        // We can spawn taskkill or kill since child is behind Arc
-        #[cfg(windows)]
-        {
-            let _ = std::process::Command::new("taskkill")
-                .args(["/F", "/PID", &server.child.lock().unwrap_or_else(|p| p.into_inner()).id().to_string()])
-                .output();
+    match &*state {
+        ServerState::Ready(server) => {
+            log::info!("[Piper] Unloading model on port {}", server.port);
+            // Kill + reap through the Mutex — no external taskkill, no races
+            {
+                let mut child = server.child.lock().unwrap_or_else(|p| p.into_inner());
+                let _ = child.kill();
+                let _ = child.wait(); // reap to avoid defunct zombies on Unix
+            }
+            *state = ServerState::Stopped;
+            true
         }
-        #[cfg(not(windows))]
-        {
-            let _ = std::process::Command::new("kill")
-                .args(["-9", &server.child.lock().unwrap_or_else(|p| p.into_inner()).id().to_string()])
-                .output();
+        ServerState::Starting { .. } => {
+            // Cancel the in-flight start: bump generation so the start thread
+            // kills its child at the next poll/Pre-Ready gate.
+            log::info!("[Piper] Cancelling in-flight start via generation bump");
+            CURRENT_GENERATION.fetch_add(1, Ordering::SeqCst);
+            *state = ServerState::Stopped;
+            true
         }
-        *state = ServerState::Stopped;
-        true
-    } else {
-        false
+        ServerState::Stopped => false,
     }
 }
 

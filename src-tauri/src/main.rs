@@ -227,6 +227,8 @@ pub fn register_hotkey(
 
 /// Spawn an async task to read clipboard and speak it.
 /// Shared by tray button and global hotkey.
+/// Routes long texts to speak_queued for streaming fragment-by-fragment playback
+/// (lower time-to-first-audio), short texts to speak_now (simpler path).
 fn spawn_speak(app: &tauri::AppHandle) {
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -234,16 +236,50 @@ fn spawn_speak(app: &tauri::AppHandle) {
         let player: State<std::sync::Mutex<audio::AudioPlayer>> = app_handle.state();
         let history: State<std::sync::Mutex<history::HistoryLog>> = app_handle.state();
         let telemetry_state: State<std::sync::Mutex<telemetry::TelemetryLog>> = app_handle.state();
-        if let Err(e) = commands::speak_now(
-            app_handle.clone(),
-            config,
-            player,
-            history,
-            telemetry_state,
-            None,
-        )
-        .await
-        {
+
+        // H7: Route long texts through speak_queued for streaming playback.
+        // speak_now's paginated path waits for all fragments then concats — TTFA
+        // equals full synthesis time. speak_queued streams each fragment as it
+        // arrives, so the user hears audio after the first fragment.
+        let use_streaming = {
+            let cfg = config.lock().unwrap();
+            let pagination = &cfg.pagination;
+            let output = &cfg.output;
+            if let Some(clip_text) = crate::clipboard::get_clipboard_text() {
+                pagination.enabled
+                    && !output.enabled
+                    && clip_text.chars().count() > pagination.fragment_size as usize
+            } else {
+                false
+            }
+        };
+
+        let result = if use_streaming {
+            let queue: State<std::sync::Mutex<crate::fragment_queue::FragmentQueue>> =
+                app_handle.state();
+            commands::speak_queued(
+                app_handle.clone(),
+                config,
+                player,
+                history,
+                queue,
+                telemetry_state,
+                None,
+            )
+            .await
+        } else {
+            commands::speak_now(
+                app_handle.clone(),
+                config,
+                player,
+                history,
+                telemetry_state,
+                None,
+            )
+            .await
+        };
+
+        if let Err(e) = result {
             log::error!("Failed to speak: {}", e);
         }
     });
@@ -260,6 +296,11 @@ pub fn do_abort_synthesis(app: &tauri::AppHandle) {
         kill_process_tree(pid);
         ACTIVE_CLI_PID.store(0, Ordering::Relaxed);
     }
+
+    // When Piper server is active, unload it so any blocked send()
+    // errors out immediately rather than waiting for the per-request
+    // timeout. The next utterance will prewarm again.
+    let _ = crate::tts::cli::unload_piper_model_internal();
 
     // Signal abort to synthesis tasks
     ABORT_REQUESTED.store(true, Ordering::Relaxed);
@@ -306,13 +347,13 @@ fn main() {
             let mut cfg = config::load_or_default();
 
             // S1: Generate control server token on first run if missing
+            // Uses OS CSPRNG (e.g. BCryptGenRandom on Windows, getrandom on Linux).
+            // Token lives in plaintext config — fine for the threat model
+            // (same-user processes can read it by definition).
             if cfg.general.control_token.is_none() {
-                use std::hash::{Hash, Hasher};
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                std::time::Instant::now().hash(&mut hasher);
-                std::time::SystemTime::now().hash(&mut hasher);
-                (&cfg as *const _ as usize).hash(&mut hasher);
-                let token = format!("{:016x}", hasher.finish());
+                let mut buf = [0u8; 16];
+                getrandom::getrandom(&mut buf).expect("OS RNG");
+                let token = buf.iter().map(|b| format!("{:02x}", b)).collect::<String>();
                 cfg.general.control_token = Some(token);
                 let _ = config::save(&cfg);
             }

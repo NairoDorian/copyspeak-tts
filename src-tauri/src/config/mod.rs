@@ -72,6 +72,7 @@ pub enum ValidationError {
     HudWidthTooSmall { value: u32, min: u32 },
     HudHeightTooSmall { value: u32, min: u32 },
     HotkeyInvalid { message: String },
+    FragmentSizeOutOfRange { value: u32, min: u32, max: u32 },
 }
 
 impl std::fmt::Display for ValidationError {
@@ -152,6 +153,13 @@ impl std::fmt::Display for ValidationError {
             }
             ValidationError::HotkeyInvalid { message } => {
                 write!(f, "Hotkey configuration invalid: {}", message)
+            }
+            ValidationError::FragmentSizeOutOfRange { value, min, max } => {
+                write!(
+                    f,
+                    "Pagination fragment size {} out of range [{}, {}]",
+                    value, min, max
+                )
             }
         }
     }
@@ -240,6 +248,7 @@ impl AppConfig {
         errors.extend(self.tts.validate());
         errors.extend(self.hud.validate());
         errors.extend(self.history.validate());
+        errors.extend(self.pagination.validate());
 
         if let Err(e) = self.hotkey.validate() {
             errors.push(ValidationError::HotkeyInvalid { message: e });

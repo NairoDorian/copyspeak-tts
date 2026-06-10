@@ -154,6 +154,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`speak_history_entry` used history entry's voice instead of current config** — The re-speak button now uses `voice_for_backend(current_config)` rather than the voice stored in the history entry, so it re-synthesizes text with the currently selected voice, backend, and speed settings as intended.
 - **Piper warmup text** — Warmup synthesis uses a substantial sentence on CUDA to compile JIT GPU kernels, and `"Hello"` (5 chars) on CPU, reducing warmup time.
 
+### Added
+
+- **Pagination fragment size validation** — `PaginationConfig::validate()` clamps `fragment_size` to 50..5000, wired into `AppConfig::validate()`, preventing hand-edited configs from producing empty or single-character fragments.
+- **Empty fragment filter** — `paginate_text()` now filters out whitespace-only fragments with a safety-net `retain()` at the end, and `force_split()` skips trimmed-empty chunks. Fixes a bug where inter-sentence whitespace at tiny fragment sizes produced empty fragments that crashed the Piper server (`ValueError("No text provided")`).
+- **Pagination regression tests** — Added `no_empty_or_whitespace_fragments_at_any_size`, `no_character_loss_any_size_unicode`, and `zwj_emoji_4byte_combining_never_panic` tests covering fragment sizes 1–500 with CJK, Devanagari, Cyrillic, ZWJ emoji, and combining marks.
+
+### Changed
+
+- **Piper speed is playback-only** — Removed dead `playback_speed`/`speed` plumbing from 8 call sites across `synthesis.rs`. `length_scale` is always `1.0` at synthesis time; the frontend applies speed via `playbackRate` on the `<audio>` element. `synthesize_async()` no longer takes a speed parameter. Updated `test_piper_request_body_serialization` to assert `length_scale == 1.0`.
+- **Piper server restart keyed on command/CUDA only** — Voice changes no longer trigger a full kill-and-restart of the Piper HTTP server (it lazy-loads voices per request from `--data-dir`). `piper_server_changed` in `set_config` now only checks `command` and `cuda`.
+- **Piper model unloaded on engine switch** — Switching away from the Piper preset (to OpenAI, ElevenLabs, Cartesia, etc.) calls `unload_piper_model_internal()`, releasing hundreds of MB of RAM/VRAM that would otherwise linger until app exit.
+- **Adaptive request timeout for Piper synthesis** — Per-request HTTP deadline via `RequestBuilder::timeout()` scales with text length: `clamp(5s + chars × per_char_ms, 10s, 180s)`, using 5ms/char for CUDA and 30ms/char for CPU. Prevents a wedged ONNX session from holding the global synthesis queue lock forever.
+- **Pre-flight voice model check** — `synthesize_via_server()` now stats the expected `.onnx` file before talking to the Piper server. If missing, returns a clear error with download instructions. Prevents silent fallback to the default voice (Piper HTTP server returns 200 for unknown voices).
+- **`is_piper()` uses preset field** — Changed from substring heuristic over the command name to the ground-truth `preset` field on `CliTtsBackend`. Eliminates false positives from commands/paths containing "piper" (e.g. `bagpiper`). The `preset` string is threaded from `TtsConfig` through `create_backend()`.
+- **Health check fast path for Piper** — When the persistent server is Ready, `health_check()` pings `GET /voices` with a 2s deadline instead of spawning a full CLI synthesis (seconds of model load). When `Starting`, returns `Ok` immediately. Falls back to the full probe only when `Stopped`.
+- **Hotkey/tray speak routes long texts to `speak_queued`** — `spawn_speak()` checks pagination config and routes long clipboard texts through `speak_queued` for streaming fragment-by-fragment playback (lower time-to-first-audio). Short texts and file-output mode continue using `speak_now`.
+- **`duration_ms` shipped in `AudioFragmentEvent`** — Backend parses audio duration from the WAV header and ships it in the fragment event payload, enabling the frontend to skip `decodeAudioData` for duration-only needs when pitch=1 and no effect.
+
+### Fixed
+
+- **`ensure_running` dead-server branch leaked processes** — Replaced the `Arc::try_unwrap`/dummy-`cmd` fallback with kill-through-the-Mutex + `wait()` + generation bump. The old code spawned a leaking `cmd.exe` on Windows (panic on Linux/macOS) and could orphan the real Python server when `try_unwrap` failed due to concurrent `Arc` clones.
+- **`unload_piper_model` shelled out to `taskkill`/`kill -9`** — Now uses `Child::kill()` + `Child::wait()` through the `Arc<Mutex<Child>>`, eliminating external process spawning, PATH dependency, and asynchronous kill (which raced follow-up restarts). `Starting` state is now cancelled via generation bump instead of being silently ignored.
+- **Control server token generation was weak** — Token now generated with OS CSPRNG (`getrandom`) producing a 32-hex-char random value instead of `DefaultHasher` (SipHash with zero keys) over low-entropy inputs (`Instant`, `SystemTime`, stack address).
+- **Control server token locked out repo's own clients** — All three first-party clients (`.pi` extension, Claude hook script, `test-piper-perf.ps1`) now read the token from `config.json` (or `COPYSPEAK_CONTROL_TOKEN` env override) and send `Authorization: Bearer <token>`. `GET /health` is now unauthenticated.
+- **Control server token compared non-constant-time** — Replaced `auth == expected` string comparison with byte-wise XOR fold constant-time compare.
+- **Parallel synthesis reported success after failure** — `synthesize_queued_parallel` now returns `Result<(), String>`. On fragment error → emits `fragment-failed`, aborts the set, returns `Err`. On `JoinSet` panic → stores a synthetic error, returns `Err`. Caller emits `pagination:complete` only on `Ok(())` and `pagination:failed` on `Err`, unifying the contract with the sequential path.
+- **Abort couldn't reach the Piper server path** — `do_abort_synthesis()` now calls `unload_piper_model_internal()`, so any blocked `send()` errors out immediately instead of waiting for the per-request timeout.
+- **Mid-stream Piper read errors silently dropped** — `response.bytes()` read failures in `synthesize_via_server()` now call `unload_piper_model()` so the next utterance gets a fresh server.
+- **`concat_wav_files` silently corrupted mismatched formats** — Now validates that all fragments share the same sample rate, channel count, and bit depth, returning a clear error instead of stamping the first header over foreign PCM. Fixed off-by-one in the skip-warning fragment label.
+- **RIFF chunk iteration missed odd-size pad byte** — `parse_wav_header()` now accounts for the RIFF spec's odd-chunk-size pad byte (`chunk_size & 1`), preventing desync on WAVs with LIST/INFO metadata chunks.
+- **Undeclared MSRV** — Added `rust-version = "1.87"` to `Cargo.toml` so contributors on older toolchains get a clear version error instead of cryptic manifest parse failures from edition-2024 dependencies.
+
+### Breaking Changes
+
+- **Control server `/speak` and `/piper-status` now require authentication** — Any external automation sending `POST /speak` or `GET /piper-status` to `127.0.0.1:43117` must include `Authorization: Bearer <token>` where `<token>` is `general.control_token` from `config.json`, or set the `COPYSPEAK_CONTROL_TOKEN` environment variable. `GET /health` remains unauthenticated.
+
 ## [0.1.5] - 2026-05-20
 
 ### Added

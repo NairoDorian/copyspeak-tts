@@ -12,6 +12,22 @@ param(
 $ControlUrl = "http://127.0.0.1:43117"
 $TestResults = @()
 
+# Load control token from config (or env override)
+$AuthHeader = $null
+if ($env:COPYSPEAK_CONTROL_TOKEN) {
+    $AuthHeader = @{ Authorization = "Bearer $env:COPYSPEAK_CONTROL_TOKEN" }
+} else {
+    $ConfigPath = "$env:APPDATA\CopySpeak TTS\config.json"
+    if (Test-Path $ConfigPath) {
+        try {
+            $cfg = Get-Content $ConfigPath -Raw | ConvertFrom-Json
+            if ($cfg.general.control_token) {
+                $AuthHeader = @{ Authorization = "Bearer $($cfg.general.control_token)" }
+            }
+        } catch {}
+    }
+}
+
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host " CopySpeak Piper TTS Performance Test" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
@@ -23,12 +39,16 @@ Write-Host ""
 function Send-HttpRequest {
     param([string]$Method, [string]$Path, [string]$Body = "")
     $uri = "$ControlUrl$Path"
+    $headers = @{}
+    if ($script:AuthHeader -and $Path -ne "/health") {
+        $headers = $script:AuthHeader
+    }
     try {
         if ($Method -eq "GET") {
-            $response = Invoke-WebRequest -Uri $uri -Method GET -TimeoutSec 5 -UseBasicParsing
+            $response = Invoke-WebRequest -Uri $uri -Method GET -Headers $headers -TimeoutSec 5 -UseBasicParsing
             return $response.Content
         } elseif ($Method -eq "POST") {
-            $response = Invoke-WebRequest -Uri $uri -Method POST -Body $Body -ContentType "application/json" -TimeoutSec 30 -UseBasicParsing
+            $response = Invoke-WebRequest -Uri $uri -Method POST -Body $Body -ContentType "application/json" -Headers $headers -TimeoutSec 30 -UseBasicParsing
             return $response.Content
         }
     } catch {
