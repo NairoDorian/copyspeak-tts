@@ -590,6 +590,9 @@ fn main() {
 
             // --- Pre-warm Piper HTTP server if configured ---
             {
+                // Set app handle so piper_server can emit status events
+                tts::piper_server::set_piper_app_handle(app.handle().clone());
+
                 let cfg = app.state::<std::sync::Mutex<config::AppConfig>>();
                 let cfg = cfg.lock().unwrap();
                 if cfg.tts.active_backend == config::TtsEngine::Local && cfg.tts.preset == "piper" {
@@ -732,6 +735,7 @@ fn main() {
             commands::run_kittentts_installer,
             commands::get_local_piper_voices,
             commands::unload_piper_model,
+            commands::get_piper_server_status,
         ])
         .build(tauri::generate_context!())
         .expect("error while building CopySpeak TTS");

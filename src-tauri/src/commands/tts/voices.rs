@@ -124,3 +124,8 @@ pub fn unload_piper_model() -> Result<bool, String> {
     log::info!("[IPC] unload_piper_model called");
     Ok(crate::tts::cli::unload_piper_model_internal())
 }
+
+#[tauri::command]
+pub fn get_piper_server_status() -> crate::tts::cli::PiperServerStatus {
+    crate::tts::cli::get_piper_server_status()
+}

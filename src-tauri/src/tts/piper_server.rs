@@ -1,12 +1,31 @@
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use tauri::Emitter;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+pub fn set_piper_app_handle(handle: tauri::AppHandle) {
+    let _ = APP_HANDLE.set(handle);
+}
+
+fn emit_model_status(phase: &str, model: Option<&str>, cuda: bool, error: Option<&str>) {
+    if let Some(app) = APP_HANDLE.get() {
+        let payload = serde_json::json!({
+            "phase": phase,
+            "model": model,
+            "cuda": cuda,
+            "error": error,
+        });
+        let _ = app.emit("piper-status-changed", payload);
+    }
+}
 
 #[derive(Clone)]
 pub struct ServerHandle {
@@ -113,6 +132,7 @@ fn spawn_start_thread(
                 model_path = alt_path;
             } else {
                 log::warn!("[Piper] Start failed: model file not found at {}", model_path.display());
+                emit_model_status("error", Some(&voice), cuda, Some("Model file not found"));
                 return;
             }
         }
@@ -121,6 +141,7 @@ fn spawn_start_thread(
             Some(p) => p,
             None => {
                 log::warn!("[Piper] Start failed: no free port available");
+                emit_model_status("error", Some(&voice), cuda, Some("No free port available"));
                 return;
             }
         };
@@ -164,10 +185,13 @@ fn spawn_start_thread(
             }
         }
 
+        emit_model_status("loading", Some(&voice), cuda, None);
+
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
                 log::warn!("[Piper] Start failed: spawn error — {}", e);
+                emit_model_status("error", Some(&voice), cuda, Some(&format!("Spawn error: {}", e)));
                 return;
             }
         };
@@ -217,6 +241,7 @@ fn spawn_start_thread(
             Err(_) => {
                 let _ = child.kill();
                 log::warn!("[Piper] Start failed: could not build health-check client");
+                emit_model_status("error", Some(&voice), cuda, Some("Health client build failed"));
                 return;
             }
         };
@@ -246,6 +271,7 @@ fn spawn_start_thread(
                     status.code(),
                     err_tail
                 );
+                emit_model_status("error", Some(&voice), cuda, Some("Server exited prematurely"));
                 return;
             }
 
@@ -266,17 +292,20 @@ fn spawn_start_thread(
                 let buffer = stderr_tail.lock().unwrap_or_else(|p| p.into_inner());
                 buffer.join("\n")
             };
+            let err_msg = format!("Start timed out after {}s", max_secs);
             log::warn!(
                 "[Piper] Server start timed out after {}s. Stderr tail:\n{}",
                 max_secs,
                 err_tail
             );
+            emit_model_status("error", Some(&voice), cuda, Some(&err_msg));
             return;
         }
 
         log::info!("[Piper] Server ready on port {} (generation {})", port, generation);
 
         // P3: Substantial CUDA warmup sentence to compile JIT kernels
+        emit_model_status("warming_up", Some(&voice), cuda, None);
         let warmup_text = if cuda {
             "This is a warm-up sentence to compile the CUDA kernels and initialize the models."
         } else {
@@ -303,10 +332,11 @@ fn spawn_start_thread(
             *state = ServerState::Ready(Arc::new(ActiveServer {
                 child: Mutex::new(child),
                 port,
-                model_name: voice,
+                model_name: voice.clone(),
                 cuda,
                 client: get_piper_client().clone(),
             }));
+            emit_model_status("ready", Some(&voice), cuda, None);
         } else {
             log::info!("[Piper] Server on port {} was superseded during warmup. Killing.", port);
             let _ = child.kill();
@@ -420,21 +450,20 @@ pub fn unload_piper_model() -> bool {
     match &*state {
         ServerState::Ready(server) => {
             log::info!("[Piper] Unloading model on port {}", server.port);
-            // Kill + reap through the Mutex — no external taskkill, no races
             {
                 let mut child = server.child.lock().unwrap_or_else(|p| p.into_inner());
                 let _ = child.kill();
-                let _ = child.wait(); // reap to avoid defunct zombies on Unix
+                let _ = child.wait();
             }
             *state = ServerState::Stopped;
+            emit_model_status("stopped", None, false, None);
             true
         }
         ServerState::Starting { .. } => {
-            // Cancel the in-flight start: bump generation so the start thread
-            // kills its child at the next poll/Pre-Ready gate.
             log::info!("[Piper] Cancelling in-flight start via generation bump");
             CURRENT_GENERATION.fetch_add(1, Ordering::SeqCst);
             *state = ServerState::Stopped;
+            emit_model_status("stopped", None, false, None);
             true
         }
         ServerState::Stopped => false,

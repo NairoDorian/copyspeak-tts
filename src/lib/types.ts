@@ -354,3 +354,21 @@ export interface HistoryState {
   error: string | null;
   last_updated: number;
 }
+
+// Piper TTS model status
+export type PiperStatusPhase = "loading" | "warming_up" | "ready" | "stopped" | "error";
+
+export interface PiperStatusPayload {
+  phase: PiperStatusPhase;
+  model: string | null;
+  cuda: boolean;
+  error: string | null;
+}
+
+export interface PiperServerStatus {
+  running: boolean;
+  model: string | null;
+  port: number | null;
+  cuda: boolean;
+  ready: boolean;
+}

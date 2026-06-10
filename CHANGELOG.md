@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Piper model lifecycle status indicator in footer** — The bottom-left footer now shows real-time Piper model state: a spinner with "Loading model..." during ONNX model load, "Loading in VRAM..." (CUDA) or "Warming up..." (CPU) during JIT compilation, a green dot with model name + CUDA badge when ready, and a red dot with error message on failure. Status transitions are emitted from the Rust backend via `piper-status-changed` events at each phase (loading → warming_up → ready → error → stopped).
+- **`get_piper_server_status` IPC command** — New Tauri IPC command `get_piper_server_status` returns `PiperServerStatus` (running, model, port, cuda, ready) for frontend polling on initial load.
+- **`PiperStore` reactive frontend store** — New `piper-store.svelte.ts` (Svelte 5 runes) tracks model lifecycle state, listens to `piper-status-changed` events in real time, and exposes getters (`isLoading`, `isWarmingUp`, `isReady`, `isError`, `isStopped`, `statusLabel`).
+- **`PiperStatusPayload` and `PiperServerStatus` TypeScript types** — Added type definitions for model status events and IPC responses in `src/lib/types.ts`.
+
 - **Persistent Piper TTS RAM caching** — Keeps the Piper voice model loaded in RAM using a background HTTP server process (`piper.http_server`) on a free localhost port. Speeds up consecutive synthesis triggers to near-instantaneous.
 - **CUDA/GPU acceleration for Piper** — Added a CUDA option to the UI and configuration, enabling GPU-accelerated local inference if available.
 - **PowerShell setup scripts** — Added `setup-piper-cpu.ps1` and `setup-piper-cuda.ps1` scripts to automate installing `piper-tts[http]` (for persistent RAM caching) along with their corresponding CPU or GPU/NVIDIA library dependencies.
