@@ -3,6 +3,19 @@ use crate::config::OpenAIConfig;
 use reqwest::Client;
 use serde_json::json;
 
+fn get_openai_client() -> &'static Client {
+    static CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            .pool_max_idle_per_host(2)
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .tcp_nodelay(true)
+            .tcp_keepalive(std::time::Duration::from_secs(60))
+            .build()
+            .expect("Failed to create OpenAI HTTP client")
+    })
+}
+
 pub struct OpenAiTtsBackend {
     config: OpenAIConfig,
     client: Client,
@@ -11,15 +24,8 @@ pub struct OpenAiTtsBackend {
 
 impl OpenAiTtsBackend {
     pub fn new(config: OpenAIConfig) -> Self {
-        let client = Client::builder()
-            .pool_max_idle_per_host(2)
-            .pool_idle_timeout(std::time::Duration::from_secs(90))
-            .tcp_nodelay(true)
-            .tcp_keepalive(std::time::Duration::from_secs(60))
-            .build()
-            .expect("Failed to create OpenAI HTTP client");
         let auth_header = format!("Bearer {}", config.api_key);
-        Self { config, client, auth_header }
+        Self { config, client: get_openai_client().clone(), auth_header }
     }
 
     /// Execute an async block using the current Tokio runtime if available,

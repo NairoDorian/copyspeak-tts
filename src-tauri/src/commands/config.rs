@@ -100,7 +100,12 @@ pub fn set_config(
     let debug_mode_changed = old_debug_mode != new_config.general.debug_mode;
     let listen_enabled_changed = old_listen_enabled != new_config.trigger.listen_enabled;
     let hotkey_changed = old_hotkey != new_config.hotkey;
-    let tts_changed = old_tts_config != new_config.tts;
+
+    let piper_server_changed = old_tts_config.command != new_config.tts.command
+        || old_tts_config.voice != new_config.tts.voice
+        || old_tts_config.cuda != new_config.tts.cuda
+        || old_tts_config.preset != new_config.tts.preset
+        || old_tts_config.active_backend != new_config.tts.active_backend;
 
     if crate::logging::is_debug_mode() {
         log::debug!(
@@ -115,7 +120,7 @@ pub fn set_config(
     }
 
     let listen_enabled_value = new_config.trigger.listen_enabled;
-    let tts_for_server = if tts_changed
+    let tts_for_server = if piper_server_changed
         && new_config.tts.active_backend == crate::config::TtsEngine::Local
         && new_config.tts.preset == "piper"
     {

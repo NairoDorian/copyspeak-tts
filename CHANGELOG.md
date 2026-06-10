@@ -22,21 +22,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Reusable HTTP connection pooling for all cloud TTS backends** — Each backend (`ElevenLabsTtsBackend`, `OpenAiTtsBackend`, `CartesiaTtsBackend`, and Groq post-process) now holds a single `reqwest::Client` with `tcp_nodelay`, `tcp_keepalive(60s)`, and `pool_max_idle_per_host(2)` configured in `new()`, eliminating TLS handshake + TCP connection setup per synthesis request.
 - **Precomputed `Bearer` header in OpenAI backend** — The `Authorization: Bearer <key>` header is now computed once in `OpenAiTtsBackend::new()` and reused across all requests, avoiding per-request `format!()` allocations.
 - **NVIDIA DLL paths cached via `OnceLock`** — The expensive `python -c "import nvidia..."` subprocess call that discovers GPU library paths now runs only once per app lifetime, cached in a static `OnceLock<Option<String>>`.
-- **Adaptive fragment sizing from telemetry** — `pagination::adaptive_fragment_size()` uses per-engine `chars_per_ms` telemetry (3+ samples required) to dynamically scale the pagination fragment size: fast engines (>20 chars/ms) get 3× the base size (capped at 2000), moderate engines (5–20 chars/ms) get 2× (capped at 1500), slow or unknown engines keep the default.
-- **Parallel cloud fragment synthesis** — For cloud backends (OpenAI, ElevenLabs, Cartesia) with multiple paginated fragments, `speak_queued` now synthesizes up to 3 fragments concurrently via `tokio::task::JoinSet`, then emits results in index order. CLI backends continue to use the existing sequential loop.
+- **Adaptive fragment sizing from telemetry** — `pagination::adaptive_fragment_size()` uses per-engine `chars_per_ms` telemetry (3+ samples required) to dynamically scale the pagination fragment size: fast engines (>1.0 chars/ms) get 3× the base size (capped at 2000), moderate engines (0.3–1.0 chars/ms) get 2× (capped at 1500), slow or unknown engines keep the default.
+- **Parallel cloud fragment synthesis** — For cloud backends (OpenAI, ElevenLabs, Cartesia) with multiple paginated fragments, `speak_queued` now synthesizes up to 3 fragments concurrently via `tokio::task::JoinSet`, then emits results in index order. Local Piper backend continues to use sequential loop to avoid server process/thread contention.
 - **Pre-decode next fragment during playback** — When a fragment starts playing, the `PlaybackStore` asynchronously base64-decodes and `decodeAudioData()` the next queued fragment in the background, so when the current fragment ends the next one is ready to play instantly with zero decode gap.
 - **Piper server pre-warm at app startup** — When the active backend is Local with the `piper` preset, `prewarm_piper_server()` spawns the HTTP server in a background thread at app launch, loading the voice model into RAM before the user ever triggers synthesis.
 - **Piper warm-up synthesis** — After the server reports ready, `prewarm_piper_server()` sends a hidden synthesis to force ONNX Runtime JIT compilation and GPU kernel init, eliminating a ~1.6s cold-start penalty on the first real request.
 - **Piper server auto-restart on config change** — `restart_piper_server()` kills and respawns the Piper server when voice or CUDA settings change, with a `PIPER_WARMING` atomic guard preventing duplicate servers.
 - **Piper server status endpoint** — `get_piper_server_status()` returns `PiperServerStatus` (running, model, port, cuda, ready) for the control server `/piper-status` health check.
 - **Piper performance test script** — `test-piper-perf.ps1` automates synthesis timing measurements via the control server API.
+- **WAV and Serialization Regression Tests** — Added comprehensive unit test suites in `wav.rs` covering truncated WAV buffers, invalid headers, and sample extraction. Added JSON request payload serialization tests in `cli.rs`.
 
 ### Changed
 
 - **Frontend Dependency Upgrades** — Upgraded Svelte to `5.56.1`, `@sveltejs/kit` to `2.63.0`, Vite to `8.0.16`, Vitest to `4.1.8`, and all Tauri frontend modules to their latest v2 releases.
 - **Backend Cargo Upgrades** — Upgraded Rust crate dependencies (`dirs` to v6, `flexi_logger` to v0.31, `winreg` to v0.56, `chrono`, and `log` to their latest patch versions).
 - **CLI synthesis engine** — Intercepts synthesis calls for Piper to route them via the running local HTTP server instead of spawning a new process for every synthesis. Adds fallback to standard CLI execution if server synthesis fails.
-- **Piper HTTP server health-check poll interval** — Reduced from every 100ms to every 50ms for the first 2 seconds, then 200ms thereafter, improving server readiness detection speed.
+- **Piper HTTP server health-check poll interval** — Uses exponential backoff starting at 100ms and doubling up to 1600ms, reducing CPU wake-ups during server startup.
 - **Piper speed control** — The `_speed` parameter is now passed as `length_scale` in the Piper HTTP API JSON body, allowing playback speed adjustments at the synthesis level.
 - **Piper server `reqwest::blocking::Client` reuse** — The health-check poll client is now stored in `PiperServerState` and reused for all subsequent synthesis HTTP requests instead of creating a fresh `Client::new()` each time.
 - **Backend created once per `speak_queued`** — The `create_backend()` call was hoisted outside the pagination loop so that the same `Arc<Box<dyn TtsBackend>>` (with its shared connection pool) is reused for all fragments in a paginated synthesis.
@@ -47,15 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`AudioContext` pre-warmed at startup** — `PlaybackStore.setupListeners()` now creates the `AudioContext` and calls `resume()` immediately at app startup instead of lazily on first playback, avoiding a 50–200ms cold-start delay.
 - **Clipboard config read** — Combined two separate `AppConfig` mutex locks (for `trigger_window_ms`/`max_text_length` and for `sanitization_config`) into a single lock acquisition in `clipboard.rs:on_change`, reducing mutex contention.
 - **Cleanup pass conditional** — `cleanup_artifacts()` in the sanitization pipeline now runs a single pass and only re-runs if the text actually changed, instead of unconditionally running twice.
-- **Piper server consolidated single-lock pattern** — `synthesize_via_server()` acquires the `PIPER_SERVER` mutex in one cohesive critical section (check → start → extract port), eliminating the triple lock/unlock cycle and race windows for duplicate server processes.
-- **Piper HTTP client simplified** — Replaced custom `build_keepalive_client()` builder with bare `reqwest::blocking::Client::new()`, which already enables connection pooling by default without unnecessary TCP keepalive syscalls on localhost.
+- **Piper server lifecycle management** — Moved to a robust, generation-aware state machine in `piper_server.rs` to coordinate startup and prevent duplicate server processes.
+- **Piper HTTP client builder** — Configured with `tcp_nodelay(true)`, `connect_timeout(2s)`, and `pool_max_idle_per_host(2)` to optimize connection reuse.
 - **Piper synthesis timing instrumentation** — Every synthesis call logs `[Piper] Synthesis — total:Xms (req:Yms read:Zms) size:N B chars:N voice:X cuda:bool` for visibility into HTTP vs data transfer time.
 - **TTS pipeline timing breakdown** — `handle_playback_output()` logs `[TTS] Pipeline — synth:Xms env:Xms hist:Xms emit:Xms total_post:Xms` showing exactly where post-synthesis time goes.
 - **Synthesis timing always visible** — Changed synthesis completion from `log::debug!` (debug-mode only) to `log::info!` so millisecond timings are always in console output.
 - **Audio thread poll interval** — Increased the audio playback monitor's channel receive timeout from 50ms to 200ms, reducing idle CPU wake-ups by 4×.
 - **Piper log prefix standardized** — All Piper-related log messages use `[Piper]` prefix for consistency across prewarm, synthesis, restart, and health-check paths.
 - **Piper server port+client extracted in a single Mutex lock** — `synthesize_via_server()` now returns a `(port, client)` tuple from one lock acquisition, eliminating a second lock/unlock cycle that cloned the HTTP client handle separately.
-- **Piper parallel paginated synthesis** — `speak_queued` now routes the Piper preset (`Local + preset "piper"`) through `synthesize_queued_parallel` alongside cloud engines, enabling concurrent fragment synthesis for multi-fragment texts via the persistent server.
+- **Sequential local Piper synthesis** — `speak_queued` routes the Piper preset sequentially to avoid head-of-line blocking and Python HTTP server single-threaded contention.
 
 ### Fixed
 
@@ -68,6 +69,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Config Validation Unit Tests** — Explicitly set `active_backend = TtsEngine::Local` in local validation tests in `tests.rs` to prevent failure when the default project engine is configured to a non-local engine.
 - **CLI TTS Engine Health Check** — Fixed the pre-existing health check to dynamically find and use any downloaded local `.onnx` voice in the user's voice folder, resolving failure errors complaining about a missing `"Rosie"` voice.
 - **Clippy and Panic Fixes in CLI TTS backend** — Resolved option unwrap panic vector in Piper server port logic and simplified file extension checks using `is_some_and`.
+- **CJK punctuation pagination panics** — Resolved Rust panics on non-ASCII delimiters (e.g. Spanish inverted punctuation, CJK delimiters `。！？`) by replacing raw byte slicing in `pagination.rs` with safe `str::get()` and using `char::len_utf8()` for word boundaries instead of assuming 1-byte offsets.
+- **Mutex Poisoning Recovery** — Replaced direct `.lock().unwrap()` calls with robust recovery via `lock_or_recover!` macro or `.unwrap_or_else(|p| p.into_inner())` across `synthesis.rs`, `fragment_queue.rs`, `telemetry.rs`, and `piper_server.rs`, preventing thread panics from bricking the entire application state.
+- **WAV Envelope Bounds Checks** — Clamped data size parsing in `wav.rs` to the actual file size to prevent out-of-bounds panics on truncated WAV headers, corrupt files, or streaming buffers.
+- **Piper Server Pipe Drainage** — Spawns dedicated background reader threads for local Piper HTTP processes' stdout and stderr channels, preventing processes from freezing when OS output buffers fill up.
+- **Frontend Playback URL Cache Leak** — Moved cache invalidation logic before the pre-decoded branch in `playback-store.svelte.ts`, resolving a bug where pre-decoded fragments would play stale cached audio URLs.
+- **WAV Concatenation Artifacts** — Modified `concat_wav_files()` to respect the declared chunk size of the first WAV fragment, preventing trailing metadata blocks (like INFO/LIST) from being appended as loud static/PCM noise.
 
 ### Performance
 
@@ -145,7 +152,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **On-demand Piper server restart missing warmup** — `synthesize_via_server()` now runs a hidden warmup synthesis after starting a new server on-demand (when the loaded voice/model doesn't match the requested one). Previously, only `prewarm_piper_server()` (config-triggered) ran the warmup; voice-mismatch restarts inside the synthesis path skipped it, making the first real request pay the 1–4s ONNX JIT/GPU init penalty on top of the server start time.
 - **`speak_history_entry` used history entry's voice instead of current config** — The re-speak button now uses `voice_for_backend(current_config)` rather than the voice stored in the history entry, so it re-synthesizes text with the currently selected voice, backend, and speed settings as intended.
-- **Piper warmup text reduced to `"Hello"`** — Warmup synthesis in both `prewarm_piper_server()` and the new on-demand path now uses `"Hello"` (5 chars) instead of a long sentence, reducing warmup time from 1–3s to 0.2–1s.
+- **Piper warmup text** — Warmup synthesis uses a substantial sentence on CUDA to compile JIT GPU kernels, and `"Hello"` (5 chars) on CPU, reducing warmup time.
 
 ## [0.1.5] - 2026-05-20
 

@@ -75,8 +75,15 @@ pub(super) fn parse_wav_header(bytes: &[u8]) -> Result<WavInfo, String> {
             ]);
             bits_per_sample = u16::from_le_bytes([bytes[offset + 22], bytes[offset + 23]]);
         } else if chunk_id == b"data" {
-            data_offset = offset + 8;
-            data_size = chunk_size;
+            let data_end = offset + 8 + chunk_size;
+            if data_end > bytes.len() {
+                // Clamp to actual file size for truncated/streaming WAVs
+                data_offset = offset + 8;
+                data_size = bytes.len().saturating_sub(offset + 8);
+            } else {
+                data_offset = offset + 8;
+                data_size = chunk_size;
+            }
         }
 
         offset += 8 + chunk_size;
@@ -131,6 +138,38 @@ pub(super) fn parse_wav_header(bytes: &[u8]) -> Result<WavInfo, String> {
     })
 }
 
+/// Extract duration from raw WAV/MP3 bytes without full decoding.
+pub fn get_wav_duration(audio_bytes: &[u8]) -> Result<u64, String> {
+    if audio_bytes.len() < 12 || &audio_bytes[0..4] != b"RIFF" || &audio_bytes[8..12] != b"WAVE" {
+        let estimated_duration_ms = if audio_bytes.len() > 100 {
+            if audio_bytes[0] == 0xFF && (audio_bytes[1] & 0xE0) == 0xE0 {
+                ((audio_bytes.len() as f64 / 16000.0) * 1000.0) as u64
+            } else {
+                2000
+            }
+        } else {
+            1000
+        };
+        return Ok(estimated_duration_ms);
+    }
+
+    let wav_info = parse_wav_header(audio_bytes)?;
+    let end = (wav_info.data_offset.saturating_add(wav_info.data_size)).min(audio_bytes.len());
+    if end <= wav_info.data_offset {
+        return Err("WAV has no audio data".into());
+    }
+    let data_len = end - wav_info.data_offset;
+    let bytes_per_sample = (wav_info.bits_per_sample / 8) as usize;
+    let channels = wav_info.channels as usize;
+    let frame_size = bytes_per_sample * channels;
+    if frame_size == 0 {
+        return Err("Invalid frame size (0)".into());
+    }
+    let total_frames = data_len / frame_size;
+    let duration_ms = (total_frames as f64 / wav_info.sample_rate as f64 * 1000.0) as u64;
+    Ok(duration_ms)
+}
+
 /// Extract an amplitude envelope from raw audio bytes.
 /// Returns `num_bars` normalized RMS values (0.0–1.0).
 ///
@@ -161,7 +200,11 @@ pub fn extract_envelope(audio_bytes: &[u8], num_bars: usize) -> Result<Amplitude
 
     let wav_info = parse_wav_header(audio_bytes)?;
 
-    let data = &audio_bytes[wav_info.data_offset..wav_info.data_offset + wav_info.data_size];
+    let end = (wav_info.data_offset.saturating_add(wav_info.data_size)).min(audio_bytes.len());
+    if end <= wav_info.data_offset {
+        return Err("WAV has no audio data".into());
+    }
+    let data = &audio_bytes[wav_info.data_offset..end];
     let bytes_per_sample = (wav_info.bits_per_sample / 8) as usize;
     let channels = wav_info.channels as usize;
     let frame_size = bytes_per_sample * channels;
@@ -274,31 +317,11 @@ fn decode_frame_mono(frame: &[u8], bytes_per_sample: usize, channels: usize) -> 
             }
             sum / channels as f32
         }
+        // Unreachable for valid WAVs: parse_wav_header validates bits_per_sample to 8/16/24/32
         _ => 0.0,
     }
 }
 
-/// Find the start of the "data" chunk payload in a WAV file.
-/// Returns the byte offset where raw PCM data begins (after "data" + 4-byte size field).
-pub(super) fn find_wav_data_offset(wav: &[u8]) -> Option<usize> {
-    if wav.len() < 12 || &wav[0..4] != b"RIFF" || &wav[8..12] != b"WAVE" {
-        return None;
-    }
-    let mut pos = 12usize;
-    while pos + 8 <= wav.len() {
-        let chunk_id = &wav[pos..pos + 4];
-        let chunk_size =
-            u32::from_le_bytes([wav[pos + 4], wav[pos + 5], wav[pos + 6], wav[pos + 7]]) as usize;
-        if chunk_id == b"data" {
-            return Some(pos + 8); // byte offset right after "data" + 4-byte size
-        }
-        pos += 8 + chunk_size;
-        if !chunk_size.is_multiple_of(2) {
-            pos += 1;
-        } // WAV chunks are word-aligned
-    }
-    None
-}
 
 /// Concatenate multiple PCM WAV buffers into a single valid WAV.
 /// All buffers must share the same sample rate, channels, and bit depth.
@@ -311,18 +334,23 @@ pub fn concat_wav_files(wavs: Vec<Vec<u8>>) -> Result<Vec<u8>, String> {
     }
 
     let first = &wavs[0];
-    let first_data_offset =
-        find_wav_data_offset(first).ok_or("First audio fragment is not a valid WAV file")?;
+    let first_info = parse_wav_header(first)
+        .map_err(|e| format!("First audio fragment: {}", e))?;
+    let first_data_offset = first_info.data_offset;
+    let first_data_end = (first_data_offset + first_info.data_size).min(first.len());
 
     // Everything before the "data" chunk identifier (RIFF header + fmt chunk + other chunks)
     let prefix_end = first_data_offset - 8; // back up past "data" (4) + data_size (4)
 
-    // Collect raw PCM from all fragments
-    let mut all_pcm: Vec<u8> = first[first_data_offset..].to_vec();
+    // Collect raw PCM from all fragments, using declared data_size to avoid trailing chunks
+    let mut all_pcm: Vec<u8> = first[first_data_offset..first_data_end].to_vec();
     for (idx, wav) in wavs[1..].iter().enumerate() {
-        match find_wav_data_offset(wav) {
-            Some(offset) => all_pcm.extend_from_slice(&wav[offset..]),
-            None => log::warn!("[Audio] Fragment {} is not a valid WAV, skipping", idx + 1),
+        match parse_wav_header(wav) {
+            Ok(info) => {
+                let end = (info.data_offset + info.data_size).min(wav.len());
+                all_pcm.extend_from_slice(&wav[info.data_offset..end]);
+            }
+            Err(_) => log::warn!("[Audio] Fragment {} is not a valid WAV, skipping", idx + 1),
         }
     }
 
@@ -347,3 +375,93 @@ pub fn concat_wav_files(wavs: Vec<Vec<u8>>) -> Result<Vec<u8>, String> {
 
     Ok(output)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_valid_16bit_wav() -> Vec<u8> {
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&36u32.to_le_bytes()); // RIFF chunk size
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes()); // fmt chunk size
+        wav.extend_from_slice(&1u16.to_le_bytes()); // audio format PCM
+        wav.extend_from_slice(&1u16.to_le_bytes()); // channels = 1
+        wav.extend_from_slice(&16000u32.to_le_bytes()); // sample rate = 16000
+        wav.extend_from_slice(&32000u32.to_le_bytes()); // byte rate = 32000
+        wav.extend_from_slice(&2u16.to_le_bytes()); // block align = 2
+        wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample = 16
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&4u32.to_le_bytes()); // data chunk size
+        wav.extend_from_slice(&[0u8; 4]); // 2 samples
+        wav
+    }
+
+    #[test]
+    fn test_parse_valid_wav() {
+        let bytes = create_valid_16bit_wav();
+        let info = parse_wav_header(&bytes).unwrap();
+        assert_eq!(info.sample_rate, 16000);
+        assert_eq!(info.channels, 1);
+        assert_eq!(info.bits_per_sample, 16);
+        assert_eq!(info.data_offset, 44);
+        assert_eq!(info.data_size, 4);
+    }
+
+    #[test]
+    fn test_parse_empty_wav() {
+        let res = parse_wav_header(&[]);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_parse_too_small_wav() {
+        let res = parse_wav_header(&[0u8; 10]);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_parse_invalid_riff() {
+        let mut bytes = create_valid_16bit_wav();
+        bytes[0..4].copy_from_slice(b"BUFF");
+        let res = parse_wav_header(&bytes);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_parse_invalid_wave() {
+        let mut bytes = create_valid_16bit_wav();
+        bytes[8..12].copy_from_slice(b"WIND");
+        let res = parse_wav_header(&bytes);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_parse_truncated_data() {
+        let mut bytes = create_valid_16bit_wav();
+        // Set data chunk size to 100, but file only has 44 bytes
+        bytes[40..44].copy_from_slice(&100u32.to_le_bytes());
+        let info = parse_wav_header(&bytes).unwrap();
+        assert_eq!(info.data_size, 4); // clamped to actual file size
+    }
+
+    #[test]
+    fn test_extract_envelope_valid() {
+        let bytes = create_valid_16bit_wav();
+        let env = extract_envelope(&bytes, 2).unwrap();
+        assert_eq!(env.values.len(), 2);
+        assert_eq!(env.duration_ms, 0); // very short
+    }
+
+    #[test]
+    fn test_concat_wav_files() {
+        let bytes1 = create_valid_16bit_wav();
+        let bytes2 = create_valid_16bit_wav();
+        let concatenated = concat_wav_files(vec![bytes1, bytes2]).unwrap();
+        let info = parse_wav_header(&concatenated).unwrap();
+        assert_eq!(info.data_size, 8); // 4 bytes + 4 bytes
+    }
+}
+

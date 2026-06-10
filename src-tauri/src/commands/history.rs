@@ -740,6 +740,12 @@ pub async fn play_history_batch(
             },
         );
 
+        let text_preview = if entry.text.len() <= 256 {
+            entry.text.clone()
+        } else {
+            format!("{}...", entry.text.chars().take(256).collect::<String>())
+        };
+
         // Emit audio fragment ready
         let _ = app.emit(
             "audio-fragment-ready",
@@ -748,7 +754,7 @@ pub async fn play_history_batch(
                 fragment_index: index,
                 fragment_total: total,
                 is_final: index == total - 1,
-                text: entry.text.clone(),
+                text: text_preview,
             },
         );
 

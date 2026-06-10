@@ -6,6 +6,7 @@ pub mod cartesia;
 pub mod cli;
 pub mod elevenlabs;
 pub mod openai;
+pub mod piper_server;
 
 use thiserror::Error;
 
@@ -21,10 +22,14 @@ pub enum TtsError {
     Io(#[from] std::io::Error),
 
     #[error("TTS engine not available: {0}")]
+    #[allow(dead_code)]
     Unavailable(String),
 
     #[error("HTTP error: {0}")]
     Http(String),
+
+    #[error("Piper server error: {0}")]
+    Server(String),
 }
 
 /// Metadata for a voice option exposed in the settings UI.

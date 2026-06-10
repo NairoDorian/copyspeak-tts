@@ -289,7 +289,7 @@ pub fn record_sample(
     char_count: usize,
     duration_ms: u64,
 ) {
-    let mut tel = telemetry.lock().unwrap();
+    let mut tel = telemetry.lock().unwrap_or_else(|p| p.into_inner());
     tel.record(backend, voice, char_count, duration_ms);
     let count = SAMPLE_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
     if count.is_multiple_of(SAVE_EVERY_N_SAMPLES) {
@@ -304,7 +304,7 @@ pub fn get_estimate(
     voice: &str,
     char_count: usize,
 ) -> (Option<u64>, f32) {
-    let tel = telemetry.lock().unwrap();
+    let tel = telemetry.lock().unwrap_or_else(|p| p.into_inner());
     tel.estimate(backend, voice, char_count)
 }
 
@@ -315,7 +315,7 @@ pub fn get_estimate_paginated(
     voice: &str,
     fragment_char_counts: &[usize],
 ) -> (Option<u64>, f32, Vec<Option<u64>>) {
-    let tel = telemetry.lock().unwrap();
+    let tel = telemetry.lock().unwrap_or_else(|p| p.into_inner());
     tel.estimate_paginated(backend, voice, fragment_char_counts)
 }
 

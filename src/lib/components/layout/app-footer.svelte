@@ -24,6 +24,42 @@
   let voiceLabel = $state<string | null>(null);
   let currentConfig = $state<AppConfig | null>(null);
 
+  const DEFAULT_VOICES: Record<string, string> = {
+    kitten: "Rosie",
+    piper: "en_US-joe-medium",
+    kokoro: "adam",
+    pocket: "alba",
+    openai: "alloy",
+    elevenlabs: "21m00Tcm4TlvDq8ikWAM",
+    cartesia: "f786b574-daa5-4673-aa0c-cbe3e8534c02"
+  };
+
+  // H6: Remember last voice selected for each engine/preset
+  let lastVoiceByPreset = $state<Record<string, string>>({
+    kitten: DEFAULT_VOICES.kitten,
+    piper: DEFAULT_VOICES.piper,
+    kokoro: DEFAULT_VOICES.kokoro,
+    pocket: DEFAULT_VOICES.pocket,
+    openai: DEFAULT_VOICES.openai,
+    elevenlabs: DEFAULT_VOICES.elevenlabs,
+    cartesia: DEFAULT_VOICES.cartesia
+  });
+
+  $effect(() => {
+    if (currentConfig) {
+      const preset = currentConfig.tts.preset;
+      const voice = currentConfig.tts.voice;
+      if (preset === "kitten-tts" && voice) lastVoiceByPreset.kitten = voice;
+      else if (preset === "piper" && voice) lastVoiceByPreset.piper = voice;
+      else if (preset === "kokoro-tts" && voice) lastVoiceByPreset.kokoro = voice;
+      else if (preset === "pocket-tts" && voice) lastVoiceByPreset.pocket = voice;
+
+      if (currentConfig.tts.openai.voice) lastVoiceByPreset.openai = currentConfig.tts.openai.voice;
+      if (currentConfig.tts.elevenlabs.voice_id) lastVoiceByPreset.elevenlabs = currentConfig.tts.elevenlabs.voice_id;
+      if (currentConfig.tts.cartesia.voice_id) lastVoiceByPreset.cartesia = currentConfig.tts.cartesia.voice_id;
+    }
+  });
+
   let isHudRoute = $state(false);
   let unlisten: (() => void) | null = null;
 
@@ -135,15 +171,6 @@
     }
   ];
 
-  const DEFAULT_VOICES: Record<string, string> = {
-    kitten: "Rosie",
-    piper: "en_US-joe-medium",
-    kokoro: "adam",
-    pocket: "alba",
-    openai: "alloy",
-    elevenlabs: "21m00Tcm4TlvDq8ikWAM",
-    cartesia: "f786b574-daa5-4673-aa0c-cbe3e8534c02"
-  };
 
   // Derive current engine ID from config
   const currentEngineId = $derived(() => {
@@ -335,22 +362,22 @@
 
     if (engine.type === "cloud") {
       newConfig.tts.active_backend = engine.id as TtsEngine;
-      // Ensure default voice is set
-      if (engine.id === "elevenlabs" && !newConfig.tts.elevenlabs.voice_id) {
-        newConfig.tts.elevenlabs.voice_id = DEFAULT_VOICES.elevenlabs;
-      } else if (engine.id === "openai" && !newConfig.tts.openai.voice) {
-        newConfig.tts.openai.voice = DEFAULT_VOICES.openai;
-      } else if (engine.id === "cartesia" && !newConfig.tts.cartesia.voice_id) {
-        newConfig.tts.cartesia.voice_id = DEFAULT_VOICES.cartesia;
-        newConfig.tts.cartesia.voice_name = "Katie";
+      if (engine.id === "elevenlabs") {
+        newConfig.tts.elevenlabs.voice_id = lastVoiceByPreset.elevenlabs || DEFAULT_VOICES.elevenlabs;
+      } else if (engine.id === "openai") {
+        newConfig.tts.openai.voice = lastVoiceByPreset.openai || DEFAULT_VOICES.openai;
+      } else if (engine.id === "cartesia") {
+        newConfig.tts.cartesia.voice_id = lastVoiceByPreset.cartesia || DEFAULT_VOICES.cartesia;
+        if (newConfig.tts.cartesia.voice_id === DEFAULT_VOICES.cartesia) {
+          newConfig.tts.cartesia.voice_name = "Katie";
+        }
       }
     } else {
       newConfig.tts.active_backend = "local";
       newConfig.tts.preset = engine.preset!;
       newConfig.tts.command = engine.command!;
       newConfig.tts.args_template = engine.argsTemplate!;
-      // Always set default voice when switching to a local engine
-      newConfig.tts.voice = DEFAULT_VOICES[engine.id];
+      newConfig.tts.voice = lastVoiceByPreset[engine.id] || DEFAULT_VOICES[engine.id];
     }
 
     try {

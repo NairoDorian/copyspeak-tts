@@ -200,6 +200,7 @@ impl Default for AppConfig {
                 appearance: AppearanceMode::default(),
                 update_checks_enabled: true,
                 locale: "en".to_string(),
+                control_token: None,
             },
             trigger: TriggerConfig {
                 listen_enabled: true,

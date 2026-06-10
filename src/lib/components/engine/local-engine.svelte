@@ -138,15 +138,25 @@
   onMount(async () => {
     try {
       dataDir = await invoke<string>("get_data_dir");
+    } catch (e) {
+      console.error("Failed to load data dir:", e);
+      dataDir = "%USERPROFILE%\\piper-voices";
+    }
+
+    try {
       homeDir = await invoke<string>("get_home_dir");
+    } catch (e) {
+      console.error("Failed to load home dir:", e);
+      homeDir = "%USERPROFILE%";
+    }
+
+    try {
       const voices = await invoke<{ value: string; label: string }[]>("get_local_piper_voices");
       if (voices && voices.length > 0) {
         localPiperVoices = voices;
       }
     } catch (e) {
       console.error("Failed to load local piper voices:", e);
-      dataDir = "%USERPROFILE%\\piper-voices";
-      homeDir = "%USERPROFILE%";
     }
   });
 </script>

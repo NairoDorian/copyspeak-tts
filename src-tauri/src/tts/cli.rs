@@ -8,8 +8,6 @@
 
 use super::{TtsBackend, TtsError};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -17,68 +15,8 @@ use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-fn get_piper_client() -> &'static reqwest::blocking::Client {
-    static CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::blocking::Client::builder()
-            .tcp_nodelay(true)
-            .pool_max_idle_per_host(2)
-            .build()
-            .expect("Failed to build Piper HTTP client")
-    })
-}
+// H1/A2/H2/H5: All server state and startup logic moved to piper_server module.
 
-pub struct PiperServerState {
-    pub child: std::process::Child,
-    pub model_name: String,
-    pub port: u16,
-    pub cuda: bool,
-    pub client: reqwest::blocking::Client,
-}
-
-pub static PIPER_SERVER: OnceLock<Mutex<Option<PiperServerState>>> = OnceLock::new();
-
-/// Flag set while a prewarm thread is starting the Piper server.
-/// `synthesize_via_server` polls this to avoid starting a second server.
-pub static PIPER_WARMING: AtomicBool = AtomicBool::new(false);
-
-pub fn get_piper_server() -> &'static Mutex<Option<PiperServerState>> {
-    PIPER_SERVER.get_or_init(|| Mutex::new(None))
-}
-
-pub fn unload_piper_model_internal() -> bool {
-    let mut server = get_piper_server().lock().unwrap();
-    if let Some(mut state) = server.take() {
-        log::info!(
-            "[Piper] Unloading model: killing server on port {}",
-            state.port
-        );
-        let _ = state.child.kill();
-        let _ = state.child.wait();
-        log::info!("[Piper] Server process terminated on port {}", state.port);
-        true
-    } else {
-        false
-    }
-}
-
-/// Restart the Piper HTTP server with new settings (model, CUDA, etc).
-/// Kills any existing server first, then starts a fresh one.
-/// Called when engine config changes (voice, CUDA) via set_config.
-pub fn restart_piper_server(command: String, voice: String, data_dir: String, cuda: bool) {
-    log::info!("[Piper] Restart requested — voice: {}, cuda: {}", voice, cuda);
-
-    // Kill existing server first
-    let had_server = unload_piper_model_internal();
-    if had_server {
-        log::info!("[Piper] Killed existing server before restart");
-    }
-
-    // Start new server in background
-    prewarm_piper_server(command, voice, data_dir, cuda);
-}
-
-/// Return the current Piper server status for the control server /health check.
 #[derive(serde::Serialize)]
 pub struct PiperServerStatus {
     pub running: bool,
@@ -88,201 +26,23 @@ pub struct PiperServerStatus {
     pub ready: bool,
 }
 
+pub fn unload_piper_model_internal() -> bool {
+    crate::tts::piper_server::unload_piper_model()
+}
+
+pub fn restart_piper_server(command: String, voice: String, data_dir: String, cuda: bool) {
+    log::info!("[Piper] Restart requested — voice: {}, cuda: {}", voice, cuda);
+    let _ = crate::tts::piper_server::unload_piper_model();
+    prewarm_piper_server(command, voice, data_dir, cuda);
+}
+
 pub fn get_piper_server_status() -> PiperServerStatus {
-    let mut server = get_piper_server().lock().unwrap();
-    if let Some(ref mut state) = *server {
-        let is_alive = matches!(state.child.try_wait(), Ok(None));
-        PiperServerStatus {
-            running: is_alive,
-            model: Some(state.model_name.clone()),
-            port: Some(state.port),
-            cuda: state.cuda,
-            ready: is_alive,
-        }
-    } else {
-        PiperServerStatus {
-            running: false,
-            model: None,
-            port: None,
-            cuda: false,
-            ready: false,
-        }
-    }
+    crate::tts::piper_server::get_piper_server_status()
 }
 
-fn get_free_port() -> Option<u16> {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .and_then(|listener| listener.local_addr())
-        .map(|addr| addr.port())
-        .ok()
-}
-
-/// RAII guard that clears PIPER_WARMING on drop.
-struct ClearWarming;
-impl Drop for ClearWarming {
-    fn drop(&mut self) {
-        PIPER_WARMING.store(false, Ordering::SeqCst);
-    }
-}
-
-/// Pre-warm the Piper HTTP server at app startup or after config change.
-/// Starts the server in a background thread so the model is loaded into RAM
-/// before the first synthesis request, eliminating the 2-10s cold-start penalty.
 pub fn prewarm_piper_server(command: String, voice: String, data_dir: String, cuda: bool) {
-    PIPER_WARMING.store(true, Ordering::SeqCst);
     std::thread::spawn(move || {
-        let _clear = ClearWarming;
-        let start = std::time::Instant::now();
-        log::info!("[Piper] Pre-warming server — voice: {}, cuda: {}", voice, cuda);
-
-        let voice_file = if voice.ends_with(".onnx") {
-            voice.clone()
-        } else {
-            format!("{}.onnx", voice)
-        };
-        let mut model_path = std::path::PathBuf::from(&data_dir).join(&voice_file);
-        if !model_path.exists() {
-            let alt_path = std::path::PathBuf::from(&voice);
-            if alt_path.exists() {
-                model_path = alt_path;
-            } else {
-                log::warn!("[Piper] Pre-warm failed: model file not found at {}", model_path.display());
-                return;
-            }
-        }
-
-        let port = match get_free_port() {
-            Some(p) => p,
-            None => {
-                log::warn!("[Piper] Pre-warm failed: no free port available");
-                return;
-            }
-        };
-
-        let model_display = model_path.display();
-        log::info!("[Piper] Starting HTTP server on port {} — model: {}, cuda: {}", port, model_display, cuda);
-        let server_start = std::time::Instant::now();
-
-        let mut cmd = std::process::Command::new(&command);
-        let mut args = vec![
-            "-m".to_string(),
-            "piper.http_server".to_string(),
-            "-m".to_string(),
-            model_path.to_string_lossy().to_string(),
-            "--port".to_string(),
-            port.to_string(),
-            "--host".to_string(),
-            "127.0.0.1".to_string(),
-        ];
-
-        if !data_dir.is_empty() {
-            args.push("--data-dir".to_string());
-            args.push(data_dir.clone());
-        }
-
-        if cuda {
-            args.push("--cuda".to_string());
-        }
-
-        cmd.args(&args)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-            if cuda {
-                if let Some(nvidia_paths) = get_nvidia_dll_paths(&command) {
-                    let current_path = std::env::var("PATH").unwrap_or_default();
-                    let new_path = format!("{};{}", nvidia_paths, current_path);
-                    cmd.env("PATH", new_path);
-                }
-            }
-        }
-
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("[Piper] Pre-warm failed: spawn error — {}", e);
-                return;
-            }
-        };
-
-        let health_client = match reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_millis(500))
-            .pool_max_idle_per_host(1)
-            .build()
-        {
-            Ok(c) => c,
-            Err(_) => {
-                let _ = child.kill();
-                log::warn!("[Piper] Pre-warm failed: could not build health-check HTTP client");
-                return;
-            }
-        };
-
-        let url = format!("http://127.0.0.1:{}/voices", port);
-        let poll_start = std::time::Instant::now();
-        let mut ready = false;
-        let mut poll_delay_ms = 100u64;
-        let max_poll_delay_ms = 1600u64;
-
-        while poll_start.elapsed() < std::time::Duration::from_secs(15) {
-            if let Ok(Some(status)) = child.try_wait() {
-                log::warn!("[Piper] Pre-warm failed: server exited with {:?} after {:?}", status.code(), poll_start.elapsed());
-                return;
-            }
-            if health_client.get(&url).send().is_ok() {
-                ready = true;
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(poll_delay_ms));
-            poll_delay_ms = (poll_delay_ms * 2).min(max_poll_delay_ms);
-        }
-
-        if !ready {
-            let _ = child.kill();
-            log::warn!("[Piper] Pre-warm failed: timed out after {:?}", poll_start.elapsed());
-            return;
-        }
-
-        let total_duration = start.elapsed();
-        log::info!(
-            "[Piper] Server ready on port {} — model loaded in {:.1}s (startup: {:.1}s, poll: {:.1}s)",
-            port,
-            total_duration.as_secs_f64(),
-            server_start.elapsed().as_secs_f64(),
-            poll_start.elapsed().as_secs_f64()
-        );
-
-        // Warm-up: send a substantial sentence to force ONNX runtime JIT / GPU kernel init.
-        // A longer text warms more model layers, making the first real synthesis fast.
-        let warmup_client = get_piper_client().clone();
-        let warmup_url = format!("http://127.0.0.1:{}/", port);
-        let warmup_body = serde_json::json!({ "text": "Hello", "length_scale": 1.0 });
-        let warmup_start = std::time::Instant::now();
-        match warmup_client.post(&warmup_url).json(&warmup_body).send() {
-            Ok(resp) => {
-                let _ = resp.bytes(); // discard — not saved, not played
-                log::info!(
-                    "[Piper] Warm-up synthesis completed in {:.1}s (1st-inference JIT/GPU init)",
-                    warmup_start.elapsed().as_secs_f64()
-                );
-            }
-            Err(e) => {
-                log::warn!("[Piper] Warm-up synthesis failed: {}. First real synthesis will be slower.", e);
-            }
-        }
-
-        let mut server = get_piper_server().lock().unwrap();
-        *server = Some(PiperServerState {
-            child,
-            model_name: voice.clone(),
-            port,
-            cuda,
-            client: get_piper_client().clone(),
-        });
+        let _ = crate::tts::piper_server::ensure_running(command, voice, data_dir, cuda);
     });
 }
 
@@ -592,19 +352,6 @@ impl CliTtsBackend {
         args
     }
 
-    fn input_path() -> String {
-        let tmp = std::env::temp_dir();
-        tmp.join("copyspeak_tts_input.txt")
-            .to_string_lossy()
-            .into_owned()
-    }
-
-    fn output_path() -> String {
-        let tmp = std::env::temp_dir();
-        tmp.join("copyspeak_tts_out.wav")
-            .to_string_lossy()
-            .into_owned()
-    }
 
     /// Returns the Piper voices directory (e.g. C:\Users\<User>\piper-voices on Windows).
     /// Used to resolve the {data_dir} placeholder so TTS engines can locate model files
@@ -626,216 +373,51 @@ impl CliTtsBackend {
             .into_owned()
     }
 
-    fn synthesize_via_server(&self, text: &str, voice: &str, speed: f32) -> Result<Vec<u8>, String> {
-        let cuda = self.cuda;
+    fn synthesize_via_server(&self, text: &str, voice: &str, speed: f32) -> Result<Vec<u8>, TtsError> {
         let data_dir = Self::data_dir();
         let t_total = std::time::Instant::now();
 
-        // Resolve model file path
-        let voice_file = if voice.ends_with(".onnx") {
-            voice.to_string()
-        } else {
-            format!("{}.onnx", voice)
-        };
-        let mut model_path = std::path::PathBuf::from(&data_dir).join(&voice_file);
-        if !model_path.exists() {
-            let alt_path = std::path::PathBuf::from(voice);
-            if alt_path.exists() {
-                model_path = alt_path;
-            } else {
-                return Err(format!("Model file not found: {}", model_path.display()));
-            }
-        }
+        // 1. Ensure server is running and get handle
+        let handle = crate::tts::piper_server::ensure_running(
+            self.command.clone(),
+            voice.to_string(),
+            data_dir,
+            self.cuda,
+        ).map_err(TtsError::Server)?;
 
-        // ── Server check / start (with minimal lock hold time) ────────────────
-        let t_lock_start = std::time::Instant::now();
-
-        if PIPER_WARMING.load(Ordering::SeqCst) {
-            log::debug!("[Piper] Pre-warm in progress, waiting for it to complete");
-            let wait_start = std::time::Instant::now();
-            while PIPER_WARMING.load(Ordering::SeqCst) {
-                if wait_start.elapsed() > std::time::Duration::from_secs(20) {
-                    return Err("Timeout waiting for Piper server prewarm".to_string());
-                }
-                std::thread::sleep(std::time::Duration::from_millis(200));
-            }
-            log::debug!(
-                "[Piper] Pre-warm completed after {:.1}s",
-                wait_start.elapsed().as_secs_f64()
-            );
-        }
-
-        // Acquire lock briefly to check server state / decide if restart needed.
-        // The lock is released before the HTTP synthesis request so other callers
-        // are not blocked during synthesis.
-        let (port, client) = {
-            let mut server = get_piper_server().lock().unwrap();
-            let mut need_start = true;
-
-            if let Some(ref mut state) = *server {
-                let is_running = matches!(state.child.try_wait(), Ok(None));
-                if is_running && state.model_name == voice && state.cuda == cuda {
-                    // Server alive with correct model — reuse
-                    need_start = false;
-                } else {
-                    log::info!(
-                        "[Piper] Restarting server — model change (was: {}, cuda: {}) → (new: {}, cuda: {})",
-                        state.model_name, state.cuda, voice, cuda
-                    );
-                    let _ = state.child.kill();
-                    *server = None;
-                }
-            }
-
-            if need_start {
-                let new_port =
-                    get_free_port().ok_or_else(|| "Failed to find a free port".to_string())?;
-                log::info!(
-                    "[Piper] Starting HTTP server on port {} — model: {} cuda: {}",
-                    new_port, voice, cuda
-                );
-
-                let t_spawn = std::time::Instant::now();
-                let mut cmd = Command::new(&self.command);
-                let mut args = vec![
-                    "-m".to_string(), "piper.http_server".to_string(),
-                    "-m".to_string(), model_path.to_string_lossy().to_string(),
-                    "--port".to_string(), new_port.to_string(),
-                    "--host".to_string(), "127.0.0.1".to_string(),
-                ];
-                if !data_dir.is_empty() {
-                    args.push("--data-dir".to_string());
-                    args.push(data_dir.clone());
-                }
-                if cuda {
-                    args.push("--cuda".to_string());
-                }
-
-                cmd.args(&args).stdout(Stdio::piped()).stderr(Stdio::piped());
-
-                #[cfg(windows)]
-                {
-                    cmd.creation_flags(CREATE_NO_WINDOW);
-                    if cuda {
-                        if let Some(nvidia_paths) = get_nvidia_dll_paths(&self.command) {
-                            let current_path = std::env::var("PATH").unwrap_or_default();
-                            let new_path = format!("{};{}", nvidia_paths, current_path);
-                            cmd.env("PATH", new_path);
-                        }
-                    }
-                }
-
-                let mut child = cmd
-                    .spawn()
-                    .map_err(|e| format!("Failed to spawn Piper server: {}", e))?;
-                log::debug!(
-                    "[Piper] Server process spawned in {:.0}ms",
-                    t_spawn.elapsed().as_millis()
-                );
-
-                // Reuse the global Piper client for health-check polling
-                let health_client = get_piper_client();
-                let url = format!("http://127.0.0.1:{}/voices", new_port);
-                let t_poll = std::time::Instant::now();
-                let mut ready = false;
-                let mut poll_delay_ms = 100u64;
-                let max_poll_delay_ms = 1600u64;
-                let mut poll_attempts = 0u32;
-
-                while t_poll.elapsed() < std::time::Duration::from_secs(15) {
-                    if let Ok(Some(status)) = child.try_wait() {
-                        return Err(format!("Piper server exited prematurely: {:?}", status));
-                    }
-                    poll_attempts += 1;
-                    if health_client.get(&url).send().is_ok() {
-                        ready = true;
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(poll_delay_ms));
-                    poll_delay_ms = (poll_delay_ms * 2).min(max_poll_delay_ms);
-                }
-
-                if !ready {
-                    let _ = child.kill();
-                    return Err("Timeout waiting for Piper server to start".to_string());
-                }
-
-                let poll_ms = t_poll.elapsed().as_millis();
-                log::info!(
-                    "[Piper] Server ready on port {} — poll:{:.0}ms attempts:{} voice:{} cuda:{}",
-                    new_port, poll_ms, poll_attempts, voice, cuda
-                );
-
-                let client = get_piper_client().clone();
-                *server = Some(PiperServerState {
-                    child,
-                    model_name: voice.to_string(),
-                    port: new_port,
-                    cuda,
-                    client: client.clone(),
-                });
-
-                // Warm-up synthesis — forces ONNX JIT / GPU kernel init so the
-                // first real synthesis (from this or subsequent calls) is fast.
-                // Without this, the user's first request pays the 1-4s cold-start
-                // penalty because `prewarm_piper_server` only warms after
-                // config-triggered restarts, not on-demand voice-mismatch restarts.
-                let warmup_url = format!("http://127.0.0.1:{}/", new_port);
-                let warmup_body = serde_json::json!({
-                    "text": "Hello",
-                    "length_scale": 1.0,
-                });
-                let t_warmup = std::time::Instant::now();
-                match client.post(&warmup_url).json(&warmup_body).send() {
-                    Ok(_) => log::debug!(
-                        "[Piper] On-demand warmup completed in {:.1}s",
-                        t_warmup.elapsed().as_secs_f64()
-                    ),
-                    Err(e) => log::warn!(
-                        "[Piper] On-demand warmup failed: {}. First real synthesis will be slower.",
-                        e
-                    ),
-                }
-
-                (new_port, client)
-            } else {
-                let state = server
-                    .as_ref()
-                    .ok_or_else(|| "Piper server state is unexpectedly missing".to_string())?;
-                (state.port, state.client.clone())
-            }
-        }; // Mutex lock released here — HTTP request runs without holding lock
-        let lock_ms = t_lock_start.elapsed().as_millis();
-
-        // ── HTTP synthesis request ────────────────────────────────────────────
-        let url = format!("http://127.0.0.1:{}/", port);
-        let body = serde_json::json!({ "text": text, "length_scale": speed });
+        // 2. HTTP synthesis request
+        let url = format!("http://127.0.0.1:{}/", handle.port);
+        let body = serde_json::json!({ "text": text, "voice": voice, "length_scale": speed });
 
         let t_req = std::time::Instant::now();
-        let response = client
+        let response = handle.client
             .post(&url)
             .json(&body)
             .send()
-            .map_err(|e| format!("HTTP request failed: {}", e))?;
+            .map_err(|e| {
+                // H2: On connection or timeout failure, mark server unhealthy (unload)
+                let _ = crate::tts::piper_server::unload_piper_model();
+                TtsError::Server(format!("HTTP request failed: {}", e))
+            })?;
         let req_ms = t_req.elapsed().as_millis();
 
         if !response.status().is_success() {
             let status = response.status();
             let err_text = response.text().unwrap_or_default();
-            return Err(format!("HTTP error {}: {}", status, err_text));
+            return Err(TtsError::Server(format!("HTTP error {}: {}", status, err_text)));
         }
 
         let t_read = std::time::Instant::now();
         let bytes = response
             .bytes()
-            .map_err(|e| format!("Failed to read response bytes: {}", e))?
+            .map_err(|e| TtsError::Server(format!("Failed to read response bytes: {}", e)))?
             .to_vec();
         let read_ms = t_read.elapsed().as_millis();
 
         let total_ms = t_total.elapsed().as_millis();
         log::info!(
-            "[Piper] Synth — total:{:.0}ms lock:{:.0}ms req:{:.0}ms read:{:.0}ms size:{}B chars:{} speed:{:.1} voice:{} cuda:{}",
-            total_ms, lock_ms, req_ms, read_ms, bytes.len(), text.len(), speed, voice, cuda
+            "[Piper] Synth — total:{:.0}ms req:{:.0}ms read:{:.0}ms size:{}B chars:{} speed:{:.1} voice:{} cuda:{}",
+            total_ms, req_ms, read_ms, bytes.len(), text.len(), speed, voice, self.cuda
         );
 
         Ok(bytes)
@@ -865,8 +447,19 @@ impl TtsBackend for CliTtsBackend {
             }
         }
 
-        let input_path = Self::input_path();
-        let output_path = Self::output_path();
+        let input_file = tempfile::Builder::new()
+            .prefix("copyspeak_tts_input_")
+            .suffix(".txt")
+            .tempfile()
+            .map_err(TtsError::Io)?;
+        let output_file = tempfile::Builder::new()
+            .prefix("copyspeak_tts_out_")
+            .suffix(".wav")
+            .tempfile()
+            .map_err(TtsError::Io)?;
+
+        let input_path = input_file.path().to_string_lossy().to_string();
+        let output_path = output_file.path().to_string_lossy().to_string();
 
         // Write input text to temp file
         if crate::logging::is_debug_mode() {
@@ -877,9 +470,6 @@ impl TtsBackend for CliTtsBackend {
             );
         }
         std::fs::write(&input_path, text).map_err(TtsError::Io)?;
-
-        // Clean up any existing output file
-        let _ = std::fs::remove_file(&output_path);
 
         let args = self.build_args(&input_path, &output_path, voice, text);
 
@@ -933,7 +523,7 @@ impl TtsBackend for CliTtsBackend {
             log::error!("[CLI TTS] Command: {}", self.command);
             log::error!("[CLI TTS] Args: {:?}", args);
 
-            let _ = std::fs::remove_file(&input_path);
+
 
             // Check if this is piper TTS missing voice model
             if self.is_piper()
@@ -1007,7 +597,7 @@ impl TtsBackend for CliTtsBackend {
 
         // Check if output file exists
         if !std::path::Path::new(&output_path).exists() {
-            let _ = std::fs::remove_file(&input_path);
+
             log::error!(
                 "[CLI TTS] Output file not found after successful command: {}",
                 output_path
@@ -1019,7 +609,7 @@ impl TtsBackend for CliTtsBackend {
         }
 
         let bytes = std::fs::read(&output_path).map_err(|e| {
-            let _ = std::fs::remove_file(&input_path);
+
             log::error!(
                 "[CLI TTS] Failed to read output file '{}': {}",
                 output_path,
@@ -1039,8 +629,7 @@ impl TtsBackend for CliTtsBackend {
 
         // Validate output
         if bytes.is_empty() {
-            let _ = std::fs::remove_file(&input_path);
-            let _ = std::fs::remove_file(&output_path);
+
             log::error!("[CLI TTS] Output file is empty: {}", output_path);
             return Err(TtsError::OutputNotFound("TTS engine created an empty audio file. The TTS synthesis may have failed.".to_string()));
         }
@@ -1050,9 +639,7 @@ impl TtsBackend for CliTtsBackend {
             log::debug!("[CLI TTS] Cleaning up temp files");
         }
 
-        // Cleanup temp files
-        let _ = std::fs::remove_file(&input_path);
-        let _ = std::fs::remove_file(&output_path);
+
 
         if crate::logging::is_debug_mode() {
             log::debug!(
@@ -1080,7 +667,6 @@ impl TtsBackend for CliTtsBackend {
             // For Python, we need to validate the full command with the script
             // Build args similar to synthesize, but use a test text
             let test_text = "test";
-            let test_output = Self::output_path();
 
             let test_voice = if self.is_piper() {
                 // Find any downloaded voice to use for testing
@@ -1105,18 +691,29 @@ impl TtsBackend for CliTtsBackend {
                 "Rosie".to_string()
             };
 
-            let args = self.build_args(&Self::input_path(), &test_output, &test_voice, test_text);
+            let input_file = tempfile::Builder::new()
+                .prefix("copyspeak_tts_health_input_")
+                .suffix(".txt")
+                .tempfile()
+                .map_err(|e| TtsError::Unavailable(format!("Failed to create temp input: {e}")))?;
+            let output_file = tempfile::Builder::new()
+                .prefix("copyspeak_tts_health_out_")
+                .suffix(".wav")
+                .tempfile()
+                .map_err(|e| TtsError::Unavailable(format!("Failed to create temp output: {e}")))?;
+
+            let test_input_path = input_file.path().to_string_lossy().to_string();
+            let test_output = output_file.path().to_string_lossy().to_string();
+
+            let args = self.build_args(&test_input_path, &test_output, &test_voice, test_text);
 
             if crate::logging::is_debug_mode() {
                 log::debug!("[CLI TTS] Health check args: {:?}", args);
             }
 
-            // Clean up any existing test files
-            let _ = std::fs::remove_file(Self::input_path());
-            let _ = std::fs::remove_file(&test_output);
-
             // Write a minimal input file
-            let _ = std::fs::write(Self::input_path(), test_text);
+            std::fs::write(&test_input_path, test_text)
+                .map_err(|e| TtsError::Unavailable(format!("Failed to write temp input: {e}")))?;
 
             #[allow(unused_mut)]
             let mut cmd = Command::new(&self.command);
@@ -1183,10 +780,6 @@ impl TtsBackend for CliTtsBackend {
             if crate::logging::is_debug_mode() {
                 log::debug!("[CLI TTS] Health check passed for Python command");
             }
-
-            // Clean up test files
-            let _ = std::fs::remove_file(Self::input_path());
-            let _ = std::fs::remove_file(&test_output);
         } else {
             // For non-Python commands, use simple --help check
             #[allow(unused_mut)]
@@ -1308,4 +901,16 @@ mod tests {
         assert_eq!(backend.voice_display_name("af_heart"), "af_heart");
         assert_eq!(backend.voice_display_name("alba"), "alba");
     }
+
+    #[test]
+    fn test_piper_request_body_serialization() {
+        let text = "Hello world";
+        let voice = "en_US-joe-medium";
+        let speed = 1.0;
+        let body = serde_json::json!({ "text": text, "voice": voice, "length_scale": speed });
+        assert_eq!(body["text"], text);
+        assert_eq!(body["voice"], voice);
+        assert_eq!(body["length_scale"], speed);
+    }
 }
+

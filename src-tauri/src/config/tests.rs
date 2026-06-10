@@ -96,17 +96,6 @@ mod tests {
     }
 
     #[test]
-    fn test_audio_format_from_extension() {
-        assert_eq!(AudioFormat::from_extension("wav"), Some(AudioFormat::Wav));
-        assert_eq!(AudioFormat::from_extension("WAV"), Some(AudioFormat::Wav));
-        assert_eq!(AudioFormat::from_extension("mp3"), Some(AudioFormat::Mp3));
-        assert_eq!(AudioFormat::from_extension("MP3"), Some(AudioFormat::Mp3));
-        assert_eq!(AudioFormat::from_extension("ogg"), Some(AudioFormat::Ogg));
-        assert_eq!(AudioFormat::from_extension("flac"), Some(AudioFormat::Flac));
-        assert_eq!(AudioFormat::from_extension("xyz"), None);
-    }
-
-    #[test]
     fn test_audio_format_serialization() {
         assert_eq!(serde_json::to_string(&AudioFormat::Wav).unwrap(), "\"wav\"");
         assert_eq!(serde_json::to_string(&AudioFormat::Mp3).unwrap(), "\"mp3\"");

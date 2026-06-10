@@ -18,13 +18,11 @@ pub enum QueueStatus {
     Stopped,
 }
 
-/// A queued fragment with its synthesized audio.
+/// A queued fragment.
 #[derive(Clone)]
 pub struct QueuedFragment {
     /// The text fragment to speak
     pub fragment: TextFragment,
-    /// Synthesized audio bytes (None if not yet synthesized)
-    pub audio: Option<Vec<u8>>,
 }
 
 /// Fragment queue for sequential TTS playback.
@@ -52,11 +50,10 @@ impl FragmentQueue {
 
     /// Add multiple text fragments to the queue.
     pub fn add_fragments(&self, fragments: Vec<TextFragment>) {
-        let mut queue = self.fragments.lock().unwrap();
+        let mut queue = self.fragments.lock().unwrap_or_else(|p| p.into_inner());
         for fragment in fragments {
             queue.push(QueuedFragment {
                 fragment,
-                audio: None,
             });
         }
         log::debug!(
@@ -68,7 +65,7 @@ impl FragmentQueue {
 
     /// Clear all fragments from the queue.
     pub fn clear(&self) {
-        let mut fragments = self.fragments.lock().unwrap();
+        let mut fragments = self.fragments.lock().unwrap_or_else(|p| p.into_inner());
         fragments.clear();
         self.current_index.store(usize::MAX, Ordering::SeqCst);
         log::debug!("[FragmentQueue] Queue cleared");
@@ -76,7 +73,7 @@ impl FragmentQueue {
 
     /// Get the total number of fragments in the queue.
     pub fn len(&self) -> usize {
-        let fragments = self.fragments.lock().unwrap();
+        let fragments = self.fragments.lock().unwrap_or_else(|p| p.into_inner());
         fragments.len()
     }
 
@@ -114,17 +111,10 @@ impl FragmentQueue {
 
     /// Get all fragments in the queue.
     pub fn fragments(&self) -> Vec<TextFragment> {
-        let queue = self.fragments.lock().unwrap();
+        let queue = self.fragments.lock().unwrap_or_else(|p| p.into_inner());
         queue.iter().map(|q| q.fragment.clone()).collect()
     }
 
-    /// Set synthesized audio for a fragment.
-    pub fn set_audio(&self, index: usize, audio: Vec<u8>) {
-        let mut queue = self.fragments.lock().unwrap();
-        if let Some(queued) = queue.get_mut(index) {
-            queued.audio = Some(audio);
-        }
-    }
 
     /// Skip to a specific fragment index.
     pub fn skip_to(&self, index: usize) -> Result<(), String> {
@@ -209,13 +199,6 @@ mod tests {
         assert!(queue.skip_to(10).is_err());
     }
 
-    #[test]
-    fn test_set_audio() {
-        let queue = FragmentQueue::new();
-        queue.add_fragments(vec![create_test_fragment("Test", 0, 1)]);
-        let fake_audio = vec![1, 2, 3, 4, 5];
-        queue.set_audio(0, fake_audio);
-    }
 
     #[test]
     fn test_stop_and_should_stop() {

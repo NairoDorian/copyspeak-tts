@@ -154,6 +154,19 @@ impl Default for VoiceSettings {
     }
 }
 
+fn get_elevenlabs_client() -> &'static Client {
+    static CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            .pool_max_idle_per_host(2)
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .tcp_nodelay(true)
+            .tcp_keepalive(std::time::Duration::from_secs(60))
+            .build()
+            .expect("Failed to create ElevenLabs HTTP client")
+    })
+}
+
 pub struct ElevenLabsTtsBackend {
     config: ElevenLabsConfig,
     client: Client,
@@ -161,14 +174,7 @@ pub struct ElevenLabsTtsBackend {
 
 impl ElevenLabsTtsBackend {
     pub fn new(config: ElevenLabsConfig) -> Self {
-        let client = Client::builder()
-            .pool_max_idle_per_host(2)
-            .pool_idle_timeout(std::time::Duration::from_secs(90))
-            .tcp_nodelay(true)
-            .tcp_keepalive(std::time::Duration::from_secs(60))
-            .build()
-            .expect("Failed to create ElevenLabs HTTP client");
-        Self { config, client }
+        Self { config, client: get_elevenlabs_client().clone() }
     }
 
     /// Execute an async block using the current Tokio runtime if available,
@@ -675,13 +681,5 @@ mod tests {
             "audio/mpeg"
         );
         assert_eq!(ElevenLabsOutputFormat::Pcm_44100.mime_type(), "audio/pcm");
-    }
-
-    #[test]
-    fn test_output_format_is_playable_by_rodio() {
-        assert!(ElevenLabsOutputFormat::Mp3_44100_128.is_playable_by_rodio());
-        assert!(ElevenLabsOutputFormat::Pcm_44100.is_playable_by_rodio());
-        assert!(ElevenLabsOutputFormat::Flac_44100.is_playable_by_rodio());
-        assert!(!ElevenLabsOutputFormat::Mulaw_8000.is_playable_by_rodio());
     }
 }

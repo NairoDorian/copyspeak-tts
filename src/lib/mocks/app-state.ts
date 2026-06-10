@@ -1,4 +1,3 @@
-import { vi } from "vitest";
 
 let mockPathname = "/";
 

@@ -158,9 +158,17 @@ class PlaybackStore {
     const base64 = fragment.audioBase64;
     console.log("[PlaybackStore] handleAudioReady called, base64 length:", base64.length);
 
+    // Invalidate caches for new audio fragment
+    if (this._cachedPitchUrl) {
+      URL.revokeObjectURL(this._cachedPitchUrl.url);
+      this._cachedPitchUrl = null;
+    }
+    this._originalBytes = null;
+
     // Use pre-decoded buffer if available (from background pre-decode)
     if (fragment.decodedBuffer) {
       this._decodedBuffer = fragment.decodedBuffer;
+      fragment.decodedBuffer = undefined; // Free memory — PCM buffer no longer needed
       console.log("[PlaybackStore] Using pre-decoded buffer, skipping decodeAudioData");
     } else {
       const binary = atob(base64);
@@ -169,10 +177,6 @@ class PlaybackStore {
       new Uint8Array(arrayBuffer).set(bytes);
 
       this._originalBytes = arrayBuffer;
-      if (this._cachedPitchUrl) {
-        URL.revokeObjectURL(this._cachedPitchUrl.url);
-        this._cachedPitchUrl = null;
-      }
 
       // Wire AnalyserNode once per audio element (guard prevents double-wiring)
       if (this._audioEl && this._audioCtx && !this._analyser.getAnalyser()) {
@@ -217,8 +221,8 @@ class PlaybackStore {
     try {
       nextFragment.decodedBuffer = await this._audioCtx.decodeAudioData(bytes.buffer.slice(0));
       console.log("[PlaybackStore] Pre-decoded next fragment", nextFragment.index);
-    } catch {
-      // Silently fail - will decode normally when it's time
+    } catch (e) {
+      console.debug("[PlaybackStore] Pre-decode failed:", e);
     }
   }
 

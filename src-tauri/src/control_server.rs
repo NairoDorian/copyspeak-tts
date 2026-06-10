@@ -73,7 +73,13 @@ fn handle_connection(mut stream: TcpStream, app: AppHandle) {
         }
     };
 
-    let response = match read_result.and_then(|()| parse_request(&buffer)) {
+    let control_token = app
+        .state::<Mutex<AppConfig>>()
+        .lock()
+        .ok()
+        .and_then(|cfg| cfg.general.control_token.clone());
+
+    let response = match read_result.and_then(|()| parse_request(&buffer, &control_token)) {
         Ok(ControlRequest::Health) => {
             http_response(200, "OK", r#"{"ok":true,"app":"CopySpeak TTS"}"#)
         }
@@ -91,7 +97,7 @@ fn handle_connection(mut stream: TcpStream, app: AppHandle) {
                 }
             }
         }
-        Err((status, message)) => http_response(status, "Error", &json_error(&message)),
+        Err((status, message)) => http_response(status, if status == 401 { "Unauthorized" } else { "Error" }, &json_error(&message)),
     };
 
     let _ = stream.write_all(response.as_bytes());
@@ -135,9 +141,26 @@ fn content_length(headers: &str) -> Option<usize> {
         .and_then(|(_, value)| value.trim().parse::<usize>().ok())
 }
 
-fn parse_request(buffer: &[u8]) -> Result<ControlRequest, (u16, String)> {
+fn parse_request(buffer: &[u8], expected_token: &Option<String>) -> Result<ControlRequest, (u16, String)> {
     let header_end = find_header_end(buffer).ok_or((400, "missing HTTP headers".to_string()))?;
     let headers = String::from_utf8_lossy(&buffer[..header_end]);
+
+    // Extract Authorization header
+    let auth_header = headers
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("authorization"))
+        .map(|(_, value)| value.trim());
+
+    // Check token if one is configured
+    if let Some(token) = expected_token {
+        let expected_auth = format!("Bearer {}", token);
+        match auth_header {
+            Some(auth) if auth == expected_auth => {}
+            _ => return Err((401, "Unauthorized: invalid or missing token".to_string())),
+        }
+    }
+
     let mut lines = headers.lines();
     let request_line = lines.next().unwrap_or_default();
     if request_line.starts_with("GET /health ") {

@@ -3,6 +3,14 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[macro_export]
+macro_rules! lock_or_recover {
+    ($mutex:expr) => {
+        $mutex.lock().unwrap_or_else(|e| e.into_inner())
+    };
+}
+
+
 mod audio;
 mod autostart;
 mod clipboard;
@@ -295,7 +303,20 @@ fn main() {
     let app = tauri::Builder::default()
         .setup(|app| {
             // --- Load config ---
-            let cfg = config::load_or_default();
+            let mut cfg = config::load_or_default();
+
+            // S1: Generate control server token on first run if missing
+            if cfg.general.control_token.is_none() {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                std::time::Instant::now().hash(&mut hasher);
+                std::time::SystemTime::now().hash(&mut hasher);
+                (&cfg as *const _ as usize).hash(&mut hasher);
+                let token = format!("{:016x}", hasher.finish());
+                cfg.general.control_token = Some(token);
+                let _ = config::save(&cfg);
+            }
+
             let initial_listen = cfg.trigger.listen_enabled;
             app.manage(std::sync::Mutex::new(cfg));
 
@@ -678,6 +699,14 @@ fn main() {
         if let tauri::RunEvent::Exit = event {
             log::info!("App exiting, cleaning up Piper server");
             let _ = crate::tts::cli::unload_piper_model_internal();
+
+            // Flush telemetry to disk on exit
+            let telemetry_state = _app_handle.state::<std::sync::Mutex<telemetry::TelemetryLog>>();
+            let lock_result = telemetry_state.lock();
+            if let Ok(telemetry) = lock_result {
+                log::info!("Flushing telemetry to disk...");
+                telemetry::save(&telemetry);
+            }
         }
     });
 }

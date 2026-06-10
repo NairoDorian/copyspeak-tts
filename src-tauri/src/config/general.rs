@@ -37,6 +37,8 @@ pub struct GeneralConfig {
     pub update_checks_enabled: bool,
     #[serde(default = "default_locale")]
     pub locale: String,
+    #[serde(default)]
+    pub control_token: Option<String>,
 }
 
 fn default_update_checks_enabled() -> bool {

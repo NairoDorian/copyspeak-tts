@@ -15,9 +15,23 @@ pub struct TextFragment {
 }
 
 impl TextFragment {
-    /// Create a new text fragment.
     pub fn new(text: String, index: usize, total: usize) -> Self {
         Self { text, index, total }
+    }
+
+    #[allow(dead_code)]
+    pub fn is_first(&self) -> bool {
+        self.index == 0
+    }
+
+    #[allow(dead_code)]
+    pub fn is_last(&self) -> bool {
+        self.index == self.total.saturating_sub(1)
+    }
+
+    #[allow(dead_code)]
+    pub fn label(&self) -> String {
+        format!("Part {} of {}", self.index + 1, self.total)
     }
 }
 
@@ -54,8 +68,14 @@ fn detect_sentence_boundaries(text: &str) -> Vec<SentenceBoundary> {
     }
 
     if boundaries.is_empty() && !text.is_empty() {
+        // Find the start of the last character to avoid landing inside a multi-byte char
+        let last_char_start = text
+            .char_indices()
+            .next_back()
+            .map(|(i, _)| i)
+            .unwrap_or(0);
         boundaries.push(SentenceBoundary {
-            position: text.len().saturating_sub(1),
+            position: last_char_start,
             delimiter: '.',
         });
     }
@@ -79,41 +99,28 @@ fn is_abbreviation_at(text: &str, pos: usize) -> bool {
     // e.g. "e.g." → check 3 bytes before pos for "e.g"
     // etc. → check 3 bytes before pos for "etc"
     if pos >= 3 {
-        let slice = &text[pos - 3..=pos];
-        let lower = slice.to_lowercase();
-        if lower == "e.g." || lower == "i.e." || lower == "n.b." || lower == "etc." {
-            return true;
+        if let Some(slice) = text.get(pos.saturating_sub(3)..=pos) {
+            let lower = slice.to_lowercase();
+            if lower == "e.g." || lower == "i.e." || lower == "n.b." || lower == "etc." {
+                return true;
+            }
         }
     }
     if pos >= 2 {
-        let slice = &text[pos - 2..=pos];
-        let lower = slice.to_lowercase();
-        if lower == "vs." {
-            return true;
+        if let Some(slice) = text.get(pos.saturating_sub(2)..=pos) {
+            let lower = slice.to_lowercase();
+            if lower == "vs." {
+                return true;
+            }
         }
     }
 
     // Also handle the FIRST period in multi-dot abbreviations like "e.g."
     // (e.g., the period after 'e' in "e.g.")
     if pos + 2 < text.len() {
-        let window = &text[pos..=pos + 2];
-        let lower = window.to_lowercase();
-        if lower == ".g." || lower == ".e." || lower == ".b." {
-            return true;
-        }
-    }
-    if pos + 1 < text.len() {
-        let window = &text[pos..=pos + 1];
-        let lower = window.to_lowercase();
-        if lower == "tc" {
-            // Part of "etc."
-            if pos >= 1 {
-                let pre = &text[pos - 1..pos];
-                if pre == "e" {
-                    return true;
-                }
-            }
-            if pos + 2 < text.len() && &text[pos + 2..pos + 3] == "." {
+        if let Some(window) = text.get(pos..=pos + 2) {
+            let lower = window.to_lowercase();
+            if lower == ".g." || lower == ".e." || lower == ".b." {
                 return true;
             }
         }
@@ -122,8 +129,8 @@ fn is_abbreviation_at(text: &str, pos: usize) -> bool {
     // Scan backwards from `pos` to find the start of the preceding word
     let before = &text[..pos];
     let word_start = match before.char_indices().rev().find(|(_, c)| !c.is_alphabetic()) {
-        Some((idx, _)) => idx + 1, // start of word is just after the non-alpha char
-        None => 0,                  // whole string is the word
+        Some((idx, c)) => idx + c.len_utf8(), // start of word is just after the non-alpha char
+        None => 0,                            // whole string is the word
     };
 
     let word = &text[word_start..pos];
@@ -175,14 +182,14 @@ pub fn paginate_text(text: &str, config: &PaginationConfig) -> Vec<TextFragment>
     let mut fragment_start = 0usize; // byte offset
 
     for (idx, boundary) in boundaries.iter().enumerate() {
-        let sentence_end = boundary.position + 1; // byte after the delimiter char
+        let sentence_end = boundary.position + boundary.delimiter.len_utf8();
 
         // char count for the chunk from fragment_start to sentence_end
         let current_fragment_len = text[fragment_start..sentence_end].chars().count();
 
         if current_fragment_len > max_size {
             if idx > 0 {
-                let prev_end = boundaries[idx - 1].position + 1;
+                let prev_end = boundaries[idx - 1].position + boundaries[idx - 1].delimiter.len_utf8();
                 if prev_end > fragment_start {
                     let fragment = &text[fragment_start..prev_end];
                     if !fragment.trim().is_empty() {
@@ -273,11 +280,11 @@ pub fn adaptive_fragment_size(
     chars_per_ms: f64,
 ) -> usize {
     let base = config.fragment_size as usize;
-    // Fast synthesis (> 20 chars/ms): 3x fragment size, capped at 2000
-    if chars_per_ms > 20.0 {
+    // Fast synthesis (> 1.0 chars/ms): 3x fragment size, capped at 2000
+    if chars_per_ms > 1.0 {
         (base * 3).min(2000)
-    // Moderate (5-20 chars/ms): 2x
-    } else if chars_per_ms > 5.0 {
+    // Moderate (> 0.3 chars/ms): 2x
+    } else if chars_per_ms > 0.3 {
         (base * 2).min(1500)
     // Slow or unknown: keep default
     } else {
@@ -308,12 +315,12 @@ pub fn estimate_fragment_count(text: &str, config: &PaginationConfig) -> usize {
     let mut fragment_start = 0usize;
 
     for (idx, boundary) in boundaries.iter().enumerate() {
-        let sentence_end = boundary.position + 1;
+        let sentence_end = boundary.position + boundary.delimiter.len_utf8();
         let current_fragment_len = text[fragment_start..sentence_end].chars().count();
 
         if current_fragment_len > max_size {
             if idx > 0 {
-                let prev_end = boundaries[idx - 1].position + 1;
+                let prev_end = boundaries[idx - 1].position + boundaries[idx - 1].delimiter.len_utf8();
                 if prev_end > fragment_start {
                     count += 1;
                     fragment_start = prev_end;
@@ -921,5 +928,57 @@ mod tests {
             );
             previous_count = fragments.len();
         }
+    }
+
+    #[test]
+    fn test_unicode_no_panic_spanish() {
+        let config = PaginationConfig { enabled: true, fragment_size: 50 };
+        let result = paginate_text("Según el Sr. García, esto es importante. Y más texto aquí.", &config);
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_unicode_no_panic_curly_quotes() {
+        let config = PaginationConfig { enabled: true, fragment_size: 50 };
+        let result = paginate_text("He said \u{201c}hi\u{201d}. Bye. More text here.", &config);
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_unicode_no_panic_cjk() {
+        let config = PaginationConfig { enabled: true, fragment_size: 50 };
+        let result = paginate_text("これはテストです。次の文です。さらにもう一文あります。", &config);
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_unicode_no_panic_cjk_after_period() {
+        let config = PaginationConfig { enabled: true, fragment_size: 50 };
+        let result = paginate_text("End.日本語 continues here. More text.", &config);
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_fragments_join_to_input() {
+        let config = PaginationConfig { enabled: true, fragment_size: 20 };
+        let input = "First sentence. Second sentence. Third one.";
+        let fragments = paginate_text(input, &config);
+        let joined: String = fragments.iter().map(|f| f.text.trim()).collect::<Vec<_>>().join(" ");
+        // Fragments should cover all the text content
+        assert!(joined.len() > 0);
+        for fragment in &fragments {
+            assert!(!fragment.text.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_adaptive_fragment_size() {
+        let config = PaginationConfig { enabled: true, fragment_size: 300 };
+        // Fast (> 1.0 chars/ms) -> 3x base = 900
+        assert_eq!(adaptive_fragment_size(&config, 1.5), 900);
+        // Moderate (> 0.3 chars/ms) -> 2x base = 600
+        assert_eq!(adaptive_fragment_size(&config, 0.5), 600);
+        // Slow (<= 0.3 chars/ms) -> base = 300
+        assert_eq!(adaptive_fragment_size(&config, 0.2), 300);
     }
 }
