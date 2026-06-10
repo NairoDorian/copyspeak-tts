@@ -547,8 +547,9 @@ impl TtsBackend for ElevenLabsTtsBackend {
         );
 
         let url = format!(
-            "https://api.elevenlabs.io/v1/text-to-speech/{}",
-            self.config.voice_id
+            "https://api.elevenlabs.io/v1/text-to-speech/{}?output_format={}",
+            self.config.voice_id,
+            self.config.output_format.as_str()
         );
 
         let body = json!({
@@ -571,7 +572,6 @@ impl TtsBackend for ElevenLabsTtsBackend {
 
         let api_key = self.config.api_key.clone();
         let mime_type = self.config.output_format.mime_type();
-        let output_format = self.config.output_format.as_str();
 
         let start_time = std::time::Instant::now();
 
@@ -583,7 +583,6 @@ impl TtsBackend for ElevenLabsTtsBackend {
                 .header("xi-api-key", api_key)
                 .header("Content-Type", "application/json")
                 .header("Accept", mime_type)
-                .query(&[("output_format", output_format)])
                 .json(&body)
                 .send()
                 .await
