@@ -22,12 +22,15 @@ bun run tauri dev
 ### Core
 
 - **Multiple trigger modes**: Double-copy (1.5s window), hotkey, or manual paste/play
-- **5 TTS engines**:
-  - **Kitten TTS** (default) — Ultra-lightweight CPU-optimized ONNX inference, 8 built-in voices
-  - **Piper TTS** — Local CLI engine with 20+ EN US voices
-  - **Kokoro TTS** — Local CLI engine with multiple voices
+- **7 TTS engines**:
+  - **Kitten TTS** (default) — Ultra-lightweight CPU-optimized ONNX inference, 8 built-in voices, model stays in RAM
+  - **Piper TTS** — Local engine with 20+ EN US voices, persistent RAM caching via HTTP server
+  - **Kokoro TTS** — Local ONNX engine with 11 voices, persistent RAM caching via HTTP server
+  - **Pocket TTS** — Local engine with 8+ voices, persistent RAM caching via HTTP server
   - **OpenAI TTS** — Cloud API with 9 voices
   - **ElevenLabs TTS** — Cloud API with voice library support
+  - **Cartesia TTS** — Cloud API with low-latency streaming
+- **Persistent RAM caching** — All four local engines (Kitten, Piper, Kokoro, Pocket) keep models loaded between utterances for sub-second synthesis
 - **HUD overlay** — Floating heads-up display with real-time waveform visualization
 - **History** — Persistent TTS generation history with playback and batch management
 

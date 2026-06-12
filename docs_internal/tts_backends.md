@@ -195,7 +195,7 @@ Default model is `nano` (fastest, smallest). Change via `--model` flag in CLI.
 
 - Models are downloaded automatically on first use from Hugging Face Hub
 - First synthesis will be slower as the model downloads (~25-80MB depending on variant)
-- Subsequent syntheses are fast as the model is cached locally
+- CopySpeak uses `kitten_server.py` to keep the model loaded in RAM via a persistent HTTP server — subsequent syntheses are ~0.3s
 - Playback speed is controlled via browser frontend playback rate (not at TTS generation level)
 
 ---
@@ -295,15 +295,69 @@ CopySpeak automatically scans this directory on startup and populates the dropdo
 
 ### kokoro-tts
 
-[Kokoro TTS](https://github.com/hexgrad/kokoro) is a fast, high-quality local TTS engine.
+[Kokoro TTS](https://github.com/hexgrad/kokoro) is a fast, high-quality local TTS engine (~500MB ONNX model).
+
+**Features:**
+
+- **11 built-in voices** across American and British English
+- **24 kHz output** — high-quality audio
+- **Direct Python API** — CopySpeak uses `kokoro_tts.Kokoro` API via `kokoro_server.py` to keep the model loaded in RAM
 
 **Installation:**
 
 ```bash
-# Install via pip
 pip install kokoro-tts
+```
 
-# Or download standalone binary
+**Model files:** Download `kokoro-v1.0.onnx` and `voices-v1.0.bin` from [GitHub Releases](https://github.com/nazdridoy/kokoro-tts/releases). Place them in a `kokoro/` directory at the project root, or CopySpeak will auto-discover them in common installation paths.
+
+**Preset Configuration:**
+
+```json
+{
+  "tts": {
+    "preset": "kokoro-tts",
+    "command": "kokoro-tts",
+    "args_template": ["{input}", "{output}", "--voice", "{voice}"],
+    "voice": "af_heart"
+  }
+}
+```
+
+**Available Voices:**
+
+- `af_heart`, `af_bella`, `af_nicole`, `af_sarah`, `af_sky` — American Female
+- `am_adam`, `am_michael` — American Male
+- `bf_emma`, `bf_isabella` — British Female
+- `bm_george`, `bm_lewis` — British Male
+
+**Notes:**
+
+- CopySpeak uses `kokoro_server.py` to keep the ~500MB ONNX model loaded in RAM via a persistent HTTP server — synthesis is ~1.1s vs 7–9s cold start
+- The server falls back to CLI subprocess if the `kokoro_tts` Python package isn't importable
+- Model files are auto-discovered in `kokoro/` directory (project root), pip install paths, and system directories
+
+---
+
+---
+
+### Pocket TTS
+
+[Pocket TTS](https://github.com/kyutai-labs/pocket-tts) by Kyutai Labs is a lightweight CPU-optimized TTS engine (100M parameters) with voice cloning support.
+
+**Features:**
+
+- **Runs on CPU** — no GPU required, uses ~2 CPU cores
+- **8+ built-in voices** — alba, marius, javert, jean, fantine, cosette, eponine, azelma
+- **24 kHz output** — high-quality audio at standard sample rate
+- **~6× real-time** — faster than real-time on modern CPUs
+- **Voice cloning** — supports custom voice prompts from WAV files
+- **Multi-language** — English, French, German, Portuguese, Italian, Spanish
+
+**Installation:**
+
+```bash
+pip install pocket-tts
 ```
 
 **Preset Configuration:**
@@ -311,28 +365,26 @@ pip install kokoro-tts
 ```json
 {
   "tts": {
-    "preset": "kokoro",
-    "command": "kokoro-tts",
-    "args_template": "--text \"{text}\" --output \"{output}\" --voice \"{voice}\"",
-    "voice": "af_nicole"
+    "preset": "pocket-tts",
+    "command": "pocket-tts",
+    "args_template": ["generate", "--voice", "{voice}", "--text", "{raw_text}", "--output-path", "{output}"],
+    "voice": "alba"
   }
 }
 ```
 
 **Available Voices:**
 
-- `af_nicole` - American Female
-- `af_sky` - American Female (younger)
-- `am_adam` - American Male
-- `am_michael` - American Male (older)
-- `bf_emma` - British Female
-- `bm_george` - British Male
+- `alba` (default) — Natural English female
+- `marius`, `javert`, `jean` — English male voices
+- `fantine`, `cosette`, `eponine`, `azelma` — English female voices
+
+**Notes:**
+
+- CopySpeak uses `pocket_server.py` to keep the model loaded in RAM via `pocket_tts.TTSModel` API — synthesis is ~0.3–0.7s vs 5–16s cold start
+- Also supports `pocket-tts serve` built-in FastAPI server for web interface
 
 ---
-
----
-
-### Chatterbox
 
 [Chatterbox](https://github.com/resemble-ai/chatterbox) is an open-source, zero-shot TTS with emotion control.
 

@@ -159,6 +159,28 @@ Config option to save generated TTS audio to file instead of playing. User speci
 
 IPC command and UI button to save the most recently spoken audio to user-selected file location. Caches last generated WAV bytes in memory.
 
+### Local TTS Model RAM Persistence
+
+**Status:** verified
+
+All four local TTS engines (Kitten, Piper, Kokoro, Pocket) keep their models loaded in RAM between utterances via persistent Python HTTP server processes. Models are loaded once at first use and reused for all subsequent synthesis calls, eliminating the cold-start model-load penalty on every trigger.
+
+**Implementation Details:**
+
+- Generalized state machine in `local_tts_server.rs` manages per-engine server lifecycle (start, health-poll, warmup, unload) with generation counters to prevent zombie processes
+- Per-engine Python HTTP servers (`kokoro_server.py`, `kitten_server.py`, `pocket_server.py`) load the model once at startup and serve synthesis requests over localhost HTTP
+- Automatic Python interpreter resolution — when the user-configured command is a non-Python binary, probes `python`/`python3`/`py` to find a suitable interpreter
+- Kokoro model-path auto-discovery searches project-root `kokoro/` directory in addition to system pip install paths
+- Engine-switch lifecycle: on config change, old engine servers are unloaded and new ones prewarmed; abort triggers unload+re-prewarm; all servers cleaned up on app exit
+
+**Performance Impact:**
+
+| Engine | Before (cold CLI) | After (RAM persistent) |
+|--------|-------------------|----------------------|
+| Kokoro | 7–9s | ~1.1s |
+| Kitten | 7–14s | ~0.3s |
+| Pocket | 5–16s | ~0.3–0.7s |
+
 ### Speech History Persistence
 
 **Status:** verified
