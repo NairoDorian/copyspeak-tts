@@ -114,7 +114,11 @@ fn get_free_port() -> Option<u16> {
 fn resolve_python_command(user_command: &str) -> String {
     // If the user's command is already a Python interpreter, use it directly
     let cmd_lower = user_command.to_lowercase();
-    if cmd_lower == "py" || cmd_lower.starts_with("python") {
+    if cmd_lower == "py"
+        || cmd_lower.starts_with("python")
+        || cmd_lower.contains("python")
+        || cmd_lower.contains("py.exe")
+    {
         // But also try to resolve "py" without version if it's just "py"
         return user_command.to_string();
     }

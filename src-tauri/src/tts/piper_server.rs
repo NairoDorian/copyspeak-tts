@@ -90,10 +90,21 @@ pub(crate) fn get_nvidia_dll_paths(python_executable: &str) -> Option<String> {
     static NVIDIA_PATHS: OnceLock<Option<String>> = OnceLock::new();
     NVIDIA_PATHS
         .get_or_init(|| {
+            // Enumerate every sub-directory of the `nvidia` namespace package that
+            // contains a `bin` folder.  Forward-compatible with both the CUDA 12
+            // wheel layout (nvidia/<pkg>/bin/*.dll) and the CUDA 13 layout where
+            // all DLLs are consolidated under nvidia/cu13/bin/x86_64/*.dll.
+            // We collect both `bin` dirs and their immediate subdirectories so
+            // both layouts resolve correctly.
             let output = Command::new(python_executable)
                 .args([
                     "-c",
-                    "import os, nvidia; print(';'.join([os.path.join(os.path.dirname(nvidia.__file__), p, 'bin') for p in ['cublas', 'cuda_nvrtc', 'cuda_runtime', 'cudnn', 'cufft', 'curand', 'cusolver', 'cusparse', 'nvjitlink'] if os.path.exists(os.path.join(os.path.dirname(nvidia.__file__), p, 'bin'))]))"
+                    "import os, glob, nvidia; \
+                     nvidia_dir = list(nvidia.__path__)[0]; \
+                     bin_dirs = glob.glob(os.path.join(nvidia_dir, '*', 'bin')); \
+                     sub_dirs = glob.glob(os.path.join(nvidia_dir, '*', 'bin', '*')); \
+                     all_dirs = [p for p in bin_dirs + sub_dirs if os.path.isdir(p)]; \
+                     print(';'.join(all_dirs))"
                 ])
                 .creation_flags(CREATE_NO_WINDOW)
                 .output()

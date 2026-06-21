@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`setup-venv-cuda-v2.ps1` — CUDA 13 GPU environment script** — New PowerShell setup script that creates a clean `.venv-v2` Python environment targeting `onnxruntime-gpu 1.27.0` (stable PyPI, CUDA 13). Installs the correct NVIDIA CUDA 13 runtime wheels (`nvidia-cuda-runtime`, `nvidia-cublas`, `nvidia-cufft`, `nvidia-cusolver`, `nvidia-cusparse`, `nvidia-nvjitlink`, `nvidia-cudnn-cu13`) with verified `win_amd64` wheels only, and runs an end-to-end CUDA provider verification matching the runtime DLL injection logic.
+
+### Fixed
+
+- **NVIDIA DLL injection broken for namespace packages** — `get_nvidia_dll_paths` in both `piper_server.rs` and `cli.rs` used `nvidia.__file__` to locate the NVIDIA site-packages directory; `nvidia` is a Python namespace package whose `__file__` is always `None`, causing a silent `TypeError` crash, the function returning `None`, and zero PATH injection happening — meaning the Piper/onnxruntime child process could never find CUDA or cuDNN DLLs. Fixed to use `list(nvidia.__path__)[0]`.
+- **CUDA 13 DLL subdirectory not injected into PATH** — CUDA 13 wheels consolidate all runtime DLLs one level deeper than CUDA 12 (`nvidia/cu13/bin/x86_64/*.dll` vs `nvidia/<pkg>/bin/*.dll`). The glob pattern `nvidia/*/bin` found the directory but not the DLLs inside it. Extended the glob to also collect immediate subdirectories of each `bin/` folder, so both layouts resolve correctly.
+- **`get_nvidia_dll_paths` hard-coded CUDA 12 subpackage names** — The Python snippet enumerated a fixed list of nine CUDA 12 subdirectory names (`cublas`, `cuda_runtime`, `cudnn`, etc.) which do not exist in the CUDA 13 wheel layout. Replaced with a `glob.glob` over all subdirectories of the `nvidia` namespace root, making DLL discovery layout-agnostic and forward-compatible with future NVIDIA packaging changes.
+
+### Added
+
 - **`set_playback_state` IPC command** — The frontend `<audio>` element now reports playback state to the backend (`AudioPlayer::set_playback_state_reported`), reviving the tray busy icon, tray-click pause/resume during playback, and backend HUD auto-hide, which were dead because the backend tracked a rodio `Sink` that no code path ever created.
 - **In-flight job preemption** — `speak_now`/`speak_queued`/`speak_history_entry` set `ABORT_REQUESTED` before acquiring the global synthesis lock, so a new double-copy/hotkey trigger cancels the running job at its next fragment boundary instead of queuing behind the entire remaining synthesis (previously up to minutes of dead wait on long local batches).
 - **Piper re-prewarm after abort** — `do_abort_synthesis` now restarts the Piper server in the background after unloading it, so the next utterance doesn't pay a multi-second cold start.

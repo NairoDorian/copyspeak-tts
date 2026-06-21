@@ -211,14 +211,27 @@ fn get_expanded_path() -> String {
 #[cfg(windows)]
 fn get_nvidia_dll_paths(python_executable: &str) -> Option<String> {
     use std::sync::OnceLock;
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
     static NVIDIA_PATHS: OnceLock<Option<String>> = OnceLock::new();
 
     NVIDIA_PATHS
         .get_or_init(|| {
+            // Enumerate every sub-directory of the `nvidia` namespace package that
+            // contains a `bin` folder. Forward-compatible with both CUDA 12 wheel
+            // layout (nvidia/<pkg>/bin/*.dll) and the CUDA 13 layout where all
+            // DLLs are consolidated under nvidia/cu13/bin/x86_64/*.dll.
+            // We collect both `bin` dirs and their immediate subdirectories.
             let output = Command::new(python_executable)
                 .args([
                     "-c",
-                    "import os, nvidia; print(';'.join([os.path.join(os.path.dirname(nvidia.__file__), p, 'bin') for p in ['cublas', 'cuda_nvrtc', 'cuda_runtime', 'cudnn', 'cufft', 'curand', 'cusolver', 'cusparse', 'nvjitlink'] if os.path.exists(os.path.join(os.path.dirname(nvidia.__file__), p, 'bin'))]))"
+                    "import os, glob, nvidia; \
+                     nvidia_dir = list(nvidia.__path__)[0]; \
+                     bin_dirs = glob.glob(os.path.join(nvidia_dir, '*', 'bin')); \
+                     sub_dirs = glob.glob(os.path.join(nvidia_dir, '*', 'bin', '*')); \
+                     all_dirs = [p for p in bin_dirs + sub_dirs if os.path.isdir(p)]; \
+                     print(';'.join(all_dirs))"
                 ])
                 .creation_flags(CREATE_NO_WINDOW)
                 .output()
@@ -890,8 +903,12 @@ impl TtsBackend for CliTtsBackend {
         }
 
         // Check if command exists with version args (e.g., py -3.12)
-        let is_python =
-            self.command == "py" || self.command == "python" || self.command.starts_with("python");
+        let cmd_lower = self.command.to_lowercase();
+        let is_python = self.command == "py"
+            || self.command == "python"
+            || self.command.starts_with("python")
+            || cmd_lower.contains("python")
+            || cmd_lower.contains("py.exe");
 
         if is_python {
             // H5: Piper fast path — if the persistent server is already running, a
