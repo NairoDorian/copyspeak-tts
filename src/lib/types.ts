@@ -45,7 +45,15 @@ export interface TriggerConfig {
   max_text_length: number;
 }
 
-export type TtsEngine = "local" | "openai" | "elevenlabs" | "cartesia";
+export type TtsEngine =
+  | "local"
+  | "http"
+  | "openai"
+  | "elevenlabs"
+  | "cartesia"
+  | "google"
+  | "microsoft"
+  | "edge";
 
 export interface OpenAIConfig {
   api_key: string;
@@ -90,6 +98,8 @@ export interface CartesiaConfig {
 
 export interface TtsConfig {
   active_backend: TtsEngine;
+  active_profile_id: string;
+  profiles: VoiceProfile[];
   preset: string;
   command: string;
   args_template: string[];
@@ -97,6 +107,99 @@ export interface TtsConfig {
   openai: OpenAIConfig;
   elevenlabs: ElevenLabsConfig;
   cartesia: CartesiaConfig;
+  edge: EdgeTtsConfig;
+  google: GoogleTtsConfig;
+  microsoft: MicrosoftTtsConfig;
+  http: HttpTtsConfig;
+}
+
+// ── Edge-TTS ──────────────────────────────────────────────────────────────────
+
+export interface EdgeTtsConfig {
+  voice: string;
+}
+
+// ── Google Gemini TTS ────────────────────────────────────────────────────────
+
+export interface GoogleTtsConfig {
+  api_key: string;
+  model: string;
+  voice_name: string;
+  output_format: string;
+}
+
+// ── Microsoft AI ─────────────────────────────────────────────────────────────
+
+export interface MicrosoftTtsConfig {
+  api_key: string;
+  endpoint: string;
+  model: string;
+  voice_name: string;
+  output_format: string;
+}
+
+// ── HTTP TTS ────────────────────────────────────────────────────────────────
+
+export interface HttpTtsConfig {
+  profile_id: string;
+  url_template: string;
+  method: string;
+  headers: [string, string][];
+  body_template: string | null;
+  voice: string;
+  response_format: string;
+  timeout_secs: number;
+}
+
+// ── Voice profiles ────────────────────────────────────────────────────────────
+
+export interface ProfileEffects {
+  enabled: boolean;
+  active_effect: EffectId;
+}
+
+export interface VoiceProfile {
+  id: string;
+  name: string;
+  description: string | null;
+  engine: TtsEngine;
+  voice: string;
+  voice_label: string | null;
+  speed: number;
+  pitch: number;
+  effects: ProfileEffects;
+  engine_options: Record<string, unknown>;
+}
+
+// ── Engine catalog (returned by list_tts_engines IPC) ────────────────────────
+
+export interface EngineOptionDescriptor {
+  key: string;
+  label: string;
+  kind: string;
+  help: string;
+  default_value: unknown;
+}
+
+export interface VoiceCatalogEntry {
+  id: string;
+  label: string;
+  language: string | null;
+  description: string | null;
+  preview_url: string | null;
+}
+
+export interface EngineCatalogEntry {
+  engine: string;
+  label: string;
+  description: string;
+  docs_url: string;
+  supports_voice_refresh: boolean;
+  supports_speed: boolean;
+  supports_pitch: boolean;
+  supports_bracket_emotes: boolean;
+  options: EngineOptionDescriptor[];
+  voices: VoiceCatalogEntry[];
 }
 
 export type PostProcessingProvider =
@@ -106,7 +209,15 @@ export type PostProcessingProvider =
   | "gemini"
   | "openrouter"
   | "ollama"
+  | "xai"
+  | "aws"
+  | "cerebras"
   | "custom";
+
+export interface PostProcessingPromptPreset {
+  label: string;
+  prompt: string;
+}
 
 export interface LlmProviderConfig {
   api_key: string;
@@ -118,12 +229,17 @@ export interface PostProcessingConfig {
   enabled: boolean;
   provider: PostProcessingProvider;
   prompt: string;
+  selected_prompt_label: string;
+  prompt_presets: PostProcessingPromptPreset[];
   groq: LlmProviderConfig;
   openai: LlmProviderConfig;
   anthropic: LlmProviderConfig;
   gemini: LlmProviderConfig;
   openrouter: LlmProviderConfig;
   ollama: LlmProviderConfig;
+  xai: LlmProviderConfig;
+  aws: LlmProviderConfig;
+  cerebras: LlmProviderConfig;
   custom: LlmProviderConfig;
 }
 

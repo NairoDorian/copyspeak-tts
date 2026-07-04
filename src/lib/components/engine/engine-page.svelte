@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { toast } from "svelte-sonner";
   import { _ } from "svelte-i18n";
+  import { showSaveBar, hideSaveBar } from "$lib/stores/save-bar.svelte";
   import { ExternalLink, Key, Download, Loader2 } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
@@ -158,7 +159,6 @@
   let localConfig = $state<AppConfig | null>(null);
   let originalConfig = $state<AppConfig | null>(null);
   let isLoading = $state(true);
-  let isSaving = $state(false);
   let activeTab = $state<string>("edge");
   let uvAvailable = $state<boolean | null>(null);
   let installingFor = $state<string | null>(null);
@@ -193,7 +193,6 @@
 
   async function saveConfig() {
     if (!localConfig) return;
-    isSaving = true;
     try {
       await invoke("set_config", { newConfig: localConfig });
       originalConfig = JSON.parse(JSON.stringify(localConfig));
@@ -201,8 +200,6 @@
     } catch (e) {
       console.error("Failed to save config:", e);
       toast.error(`Failed to save settings: ${e}`);
-    } finally {
-      isSaving = false;
     }
   }
 
@@ -210,6 +207,15 @@
     if (!originalConfig) return;
     localConfig = JSON.parse(JSON.stringify(originalConfig));
   }
+
+  $effect(() => {
+    if (hasChanges) {
+      showSaveBar(saveConfig, cancelChanges, $_("engine.saveBar.saveChanges"), $_("engine.saveBar.cancel"));
+    } else {
+      hideSaveBar();
+    }
+    return () => hideSaveBar();
+  });
 
   async function runInstaller(id: string) {
     installingFor = id;
@@ -365,24 +371,6 @@
       </main>
     </div>
 
-    {#if hasChanges}
-      <div
-        class="border-border bg-card fixed right-4 bottom-12 z-60 flex items-center gap-3 border px-4 py-2.5 shadow-lg"
-      >
-        <Button
-          size="sm"
-          variant="ghost"
-          onclick={cancelChanges}
-          disabled={isSaving}
-          class="h-8 px-3"
-        >
-          {$_("engine.saveBar.cancel")}
-        </Button>
-        <Button size="sm" onclick={saveConfig} disabled={isSaving} class="h-8 px-4">
-          {isSaving ? $_("engine.saveBar.saving") : $_("engine.saveBar.saveChanges")}
-        </Button>
-      </div>
-    {/if}
   {:else}
     <div class="flex min-h-[60vh] items-center justify-center px-6">
       <div class="mx-auto w-full max-w-sm text-center">

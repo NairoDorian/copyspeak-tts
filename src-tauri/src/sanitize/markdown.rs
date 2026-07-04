@@ -2,16 +2,30 @@
 
 use regex::Regex;
 
-/// Strip all markdown syntax from text.
-pub(super) fn strip_markdown(text: &str) -> String {
+/// Strip markdown syntax from text, respecting per-feature config toggles.
+pub(super) fn strip_markdown(text: &str, config: &crate::config::MarkdownSanitizationConfig) -> String {
     let mut result = text.to_string();
-    result = strip_code_blocks(&result);
-    result = strip_inline_code(&result);
-    result = strip_links(&result);
-    result = strip_headers(&result);
-    result = strip_bold_italic(&result);
-    result = strip_lists(&result);
-    result = strip_blockquotes(&result);
+    if config.strip_code_blocks {
+        result = strip_code_blocks(&result);
+    }
+    if config.strip_inline_code {
+        result = strip_inline_code(&result);
+    }
+    if config.strip_links {
+        result = strip_links(&result);
+    }
+    if config.strip_headers {
+        result = strip_headers(&result);
+    }
+    if config.strip_bold_italic {
+        result = strip_bold_italic(&result);
+    }
+    if config.strip_lists {
+        result = strip_lists(&result);
+    }
+    if config.strip_blockquotes {
+        result = strip_blockquotes(&result);
+    }
     result
 }
 
@@ -137,8 +151,9 @@ mod tests {
 
     #[test]
     fn test_strip_lists_legend_example() {
+        let config = crate::config::MarkdownSanitizationConfig::default();
         let input = "## Legend\n\n- **Added**: New features\n- **Changed**: Changes in existing functionality.\n- **Deprecated**: Soon-to-be removed features.\n- **Removed**: Removed features";
-        let result = strip_markdown(input);
+        let result = strip_markdown(input, &config);
         assert_eq!(result, "Legend.\n\nAdded: New features.\nChanged: Changes in existing functionality.\nDeprecated: Soon-to-be removed features.\nRemoved: Removed features.");
     }
 
@@ -150,11 +165,39 @@ mod tests {
 
     #[test]
     fn test_strip_markdown_all() {
+        let config = crate::config::MarkdownSanitizationConfig::default();
         let input = "# Title\n**bold** and *italic*\n- item\n> quote\n`code`";
-        let result = strip_markdown(input);
+        let result = strip_markdown(input, &config);
         assert!(!result.contains('#'));
         assert!(!result.contains("**"));
-        assert!(!result.contains('`'));
         assert!(!result.contains('>'));
+    }
+
+    #[test]
+    fn test_strip_markdown_respects_inline_code_toggle() {
+        // With inline code stripping disabled (default), backtick content preserved
+        let mut config = crate::config::MarkdownSanitizationConfig::default();
+        config.strip_inline_code = false;
+        let input = "Use `sudo` command";
+        let result = strip_markdown(input, &config);
+        assert!(result.contains('`'), "Inline code should be preserved when strip_inline_code=false");
+
+        // With inline code stripping enabled
+        config.strip_inline_code = true;
+        let result = strip_markdown(input, &config);
+        assert!(!result.contains('`'), "Inline code should be removed when strip_inline_code=true");
+    }
+
+    #[test]
+    fn test_strip_markdown_respects_code_block_toggle() {
+        let mut config = crate::config::MarkdownSanitizationConfig::default();
+        config.strip_code_blocks = true;
+        let input = "Text\n```code```\nMore";
+        let result = strip_markdown(input, &config);
+        assert!(!result.contains("```"), "Code blocks should be removed when strip_code_blocks=true");
+
+        config.strip_code_blocks = false;
+        let result = strip_markdown(input, &config);
+        assert!(result.contains("```"), "Code blocks should be preserved when strip_code_blocks=false");
     }
 }

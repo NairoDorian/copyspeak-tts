@@ -6,6 +6,7 @@
   import { invoke, isTauri } from "$lib/services/tauri";
   import AppHeader from "$lib/components/layout/app-header.svelte";
   import AppFooter from "$lib/components/layout/app-footer.svelte";
+  import MotionWrapper from "$lib/components/layout/motion-wrapper.svelte";
   import { startHistoryEventListeners, stopHistoryEventListeners } from "$lib/utils/history-events";
   import type { AppConfig } from "$lib/types";
   import "./+layout.css";
@@ -16,6 +17,9 @@
   import { setLocale, waitForI18nReady } from "$lib/i18n";
   import { isRtl } from "$lib/i18n/store";
   import ThemeToggle from "$lib/components/theme-toggle.svelte";
+  import { saveBar } from "$lib/stores/save-bar.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { _ } from "svelte-i18n";
 
   let { children } = $props();
 
@@ -150,6 +154,18 @@
     }
   });
 
+  async function handleSaveBarSave() {
+    if (!saveBar.onSave) return;
+    saveBar.isSaving = true;
+    try {
+      await saveBar.onSave();
+    } catch {
+      // Error already handled by the save function
+    } finally {
+      saveBar.isSaving = false;
+    }
+  }
+
   // Cleanup event listeners when app unmounts
   onDestroy(async () => {
     if (isWeb) return;
@@ -179,7 +195,9 @@
       </div>
     </header>
     <main>
-      {@render children()}
+      <MotionWrapper>
+        {@render children()}
+      </MotionWrapper>
     </main>
   </div>
 {:else if isHud}
@@ -203,12 +221,33 @@
       <main
         class={isOnboarding ? "w-full overflow-y-auto" : "w-full overflow-y-auto px-4 py-6 sm:px-6"}
       >
-        {@render children()}
+        <MotionWrapper>
+          {@render children()}
+        </MotionWrapper>
       </main>
 
       {#if !isOnboarding}
         <AppFooter />
       {/if}
     </div>
+
+    {#if saveBar.visible}
+      <div
+        class="border-border bg-card fixed right-4 bottom-12 z-[60] flex items-center gap-3 border px-4 py-2.5 shadow-lg"
+      >
+        <Button
+          size="sm"
+          variant="ghost"
+          onclick={() => saveBar.onCancel?.()}
+          disabled={saveBar.isSaving}
+          class="h-8 px-3"
+        >
+          {saveBar.cancelLabel}
+        </Button>
+        <Button size="sm" onclick={handleSaveBarSave} disabled={saveBar.isSaving} class="h-8 px-4">
+          {saveBar.isSaving ? $_("common.loading") : saveBar.saveLabel}
+        </Button>
+      </div>
+    {/if}
   </TooltipProvider>
 {/if}

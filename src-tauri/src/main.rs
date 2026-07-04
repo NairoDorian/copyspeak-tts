@@ -678,6 +678,16 @@ fn main() {
             commands::delete_history_batch,
             commands::play_history_batch,
             commands::trigger_update_check,
+            // Profiles
+            commands::set_active_profile,
+            commands::speak_now_with_profile,
+            // Engine catalog & installers
+            commands::list_tts_engines,
+            commands::list_tts_voices,
+            commands::install_engine,
+            commands::test_tts_engine_config,
+            // Post-processing models
+            commands::list_post_processing_models,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CopySpeak TTS");

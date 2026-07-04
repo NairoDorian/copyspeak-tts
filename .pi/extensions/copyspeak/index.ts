@@ -190,7 +190,7 @@ async function postSpeak(text: string): Promise<unknown> {
         });
         res.on("end", () => {
           if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-            resolve(parseJson(responseBody));
+            resolve(JSON.parse(responseBody));
           } else reject(new Error(`HTTP ${res.statusCode}: ${responseBody}`));
         });
       }
@@ -257,11 +257,6 @@ function extractText(message: any): string {
 
 function hasSpokenThinkingContent(content: string): boolean {
   return [...spokenThinkingBlocks].some((entry) => entry.endsWith(`:${content}`));
-}
-
-function prepareText(text: string): string {
-  const cleaned = cleanForSpeech(text);
-  return state.maxChars > 0 ? truncateAtBoundary(cleaned, state.maxChars) : cleaned;
 }
 
 function cleanForSpeech(text: string): string {

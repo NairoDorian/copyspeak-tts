@@ -4,14 +4,13 @@
   import { invoke } from "$lib/services/tauri";
   import { toast } from "svelte-sonner";
   import { _ } from "svelte-i18n";
+  import { showSaveBar, hideSaveBar } from "$lib/stores/save-bar.svelte";
   import ProfileManager from "$lib/components/engine/profile-manager.svelte";
   import type { AppConfig } from "$lib/types";
 
   let localConfig = $state<AppConfig | null>(null);
   let originalConfig = $state<AppConfig | null>(null);
   let isLoading = $state(true);
-  let isSaving = $state(false);
-
   const hasChanges = $derived(
     originalConfig !== null &&
       localConfig !== null &&
@@ -34,7 +33,6 @@
 
   async function saveConfig() {
     if (!localConfig) return;
-    isSaving = true;
     try {
       await invoke("set_config", { newConfig: localConfig });
       originalConfig = JSON.parse(JSON.stringify(localConfig));
@@ -42,8 +40,6 @@
     } catch (e) {
       console.error("Failed to save config:", e);
       toast.error(`Failed to save profiles: ${e}`);
-    } finally {
-      isSaving = false;
     }
   }
 
@@ -51,6 +47,15 @@
     if (!originalConfig) return;
     localConfig = JSON.parse(JSON.stringify(originalConfig));
   }
+
+  $effect(() => {
+    if (hasChanges) {
+      showSaveBar(saveConfig, cancelChanges, $_("settings.actions.save"), $_("settings.actions.cancel"));
+    } else {
+      hideSaveBar();
+    }
+    return () => hideSaveBar();
+  });
 
   onMount(() => {
     loadConfig();
@@ -72,25 +77,6 @@
       <ProfileManager bind:localConfig />
     </main>
 
-    <!-- Save Bar -->
-    {#if hasChanges}
-      <div
-        class="border-border bg-card fixed right-4 bottom-12 z-60 flex items-center gap-3 border px-4 py-2.5 shadow-lg"
-      >
-        <Button
-          size="sm"
-          variant="ghost"
-          onclick={cancelChanges}
-          disabled={isSaving}
-          class="h-8 px-3"
-        >
-          {$_("settings.actions.cancel")}
-        </Button>
-        <Button size="sm" onclick={saveConfig} disabled={isSaving} class="h-8 px-4">
-          {isSaving ? $_("common.loading") : $_("settings.actions.save")}
-        </Button>
-      </div>
-    {/if}
   {:else}
     <div class="flex min-h-[60vh] items-center justify-center px-6">
       <div class="mx-auto w-full max-w-sm text-center">

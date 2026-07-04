@@ -189,7 +189,8 @@ pub async fn speak_now(
     speak_now_internal(app, config, _player, history, telemetry_state, text, None).await
 }
 
-pub(crate) async fn speak_now_with_profile(
+#[tauri::command]
+pub async fn speak_now_with_profile(
     app: AppHandle,
     config: State<'_, Mutex<AppConfig>>,
     player: State<'_, Mutex<AudioPlayer>>,
@@ -217,7 +218,7 @@ async fn speak_now_internal(
     history: State<'_, Mutex<HistoryLog>>,
     telemetry_state: State<'_, Mutex<telemetry::TelemetryLog>>,
     text: Option<String>,
-    profile_id: Option<String>,
+    _profile_id: Option<String>,
 ) -> Result<(), String> {
     let text = get_text_or_clipboard(text)?;
     if text.trim().is_empty() {

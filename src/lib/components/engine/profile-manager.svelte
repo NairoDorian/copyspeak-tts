@@ -74,7 +74,7 @@
       catalog = entries;
       const next: Partial<Record<TtsEngine, VoiceCatalogEntry[]>> = {};
       for (const entry of entries) {
-        next[entry.engine] = entry.voices;
+        next[entry.engine as TtsEngine] = entry.voices;
       }
       voicesByEngine = next;
     } catch (err) {

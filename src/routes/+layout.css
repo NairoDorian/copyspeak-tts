@@ -119,3 +119,32 @@
     @apply bg-background;
   }
 }
+
+/* Page motion wrapper — fades + slides up on route change */
+.motion-wrapper {
+  transform: translateY(30px);
+  animation: motion-wrapper-enter 500ms cubic-bezier(0, 0.8, 0.1, 1) forwards;
+}
+
+.motion-wrapper.motion-disabled {
+  animation-duration: 0ms;
+  animation-name: none;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .motion-wrapper {
+    animation-duration: 0ms;
+    animation-name: none;
+    transform: translateY(0);
+  }
+}
+
+@keyframes motion-wrapper-enter {
+  from {
+    transform: translateY(30px);
+  }
+  to {
+    transform: translateY(0);
+  }
+}

@@ -16,6 +16,7 @@ pub enum PostProcessingProvider {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct PostProcessingConfig {
     pub enabled: bool,
     pub provider: PostProcessingProvider,
@@ -40,6 +41,7 @@ pub struct PostProcessingConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct PostProcessingPromptPreset {
     pub label: String,
     pub prompt: String,
@@ -102,10 +104,12 @@ impl Default for PostProcessingConfig {
     }
 }
 
+#[allow(dead_code)]
 fn default_selected_prompt_label() -> String {
     "Summarize".to_string()
 }
 
+#[allow(dead_code)]
 fn default_xai_config() -> LlmProviderConfig {
     LlmProviderConfig {
         api_key: String::new(),
@@ -114,6 +118,7 @@ fn default_xai_config() -> LlmProviderConfig {
     }
 }
 
+#[allow(dead_code)]
 fn default_aws_config() -> LlmProviderConfig {
     LlmProviderConfig {
         api_key: String::new(),
@@ -123,6 +128,7 @@ fn default_aws_config() -> LlmProviderConfig {
     }
 }
 
+#[allow(dead_code)]
 fn default_cerebras_config() -> LlmProviderConfig {
     LlmProviderConfig {
         api_key: String::new(),
@@ -131,6 +137,7 @@ fn default_cerebras_config() -> LlmProviderConfig {
     }
 }
 
+#[allow(dead_code)]
 pub fn default_prompt_presets() -> Vec<PostProcessingPromptPreset> {
     vec![
         PostProcessingPromptPreset {
@@ -160,5 +167,6 @@ pub fn default_prompt_presets() -> Vec<PostProcessingPromptPreset> {
     ]
 }
 
+#[allow(dead_code)]
 pub const DEFAULT_PROMPT_CONCISE: &str = "Rewrite the text to be shorter, clearer, and easier for a developer to understand. Preserve meaning. Return only the rewritten text, not bullets unless the input is already a list.";
 pub const DEFAULT_PROMPT_SUMMARIZE: &str = "Summarize the text for a developer in 1-3 concise sentences. Preserve key decisions, requirements, and action items. Return only the summary.";

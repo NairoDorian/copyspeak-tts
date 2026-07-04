@@ -39,7 +39,7 @@ impl Default for MarkdownSanitizationConfig {
             enabled: true,
             strip_headers: true,
             strip_code_blocks: true,
-            strip_inline_code: true,
+            strip_inline_code: false,
             strip_links: true,
             strip_bold_italic: true,
             strip_lists: true,

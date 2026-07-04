@@ -8,7 +8,6 @@
   import PostProcessSettings from "$lib/components/settings/post-process-settings.svelte";
   import HistorySettings from "$lib/components/settings/history-settings.svelte";
   import EffectsSettings from "$lib/components/settings/effects-settings.svelte";
-  import PostProcessingSettings from "$lib/components/settings/post-processing-settings.svelte";
   import ImportExportSettings from "$lib/components/settings/import-export-settings.svelte";
   import AboutSettings from "$lib/components/settings/about-settings.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -20,13 +19,13 @@
   import { onMount, onDestroy } from "svelte";
   import { tick } from "svelte";
   import { _ } from "svelte-i18n";
+  import { showSaveBar, hideSaveBar } from "$lib/stores/save-bar.svelte";
 
   import type { AppConfig, HudPosition } from "$lib/types";
 
   let localConfig = $state<AppConfig | null>(null);
   let originalConfig = $state<AppConfig | null>(null);
   let isLoading = $state(true);
-  let isSaving = $state(false);
   type SettingsTab = "general" | "history" | "effects" | "advanced" | "about";
 
   let activeTab = $state<SettingsTab>("general");
@@ -147,7 +146,6 @@
 
   async function saveConfig() {
     if (!localConfig) return;
-    isSaving = true;
     try {
       await invoke("set_config", { newConfig: localConfig });
       originalConfig = JSON.parse(JSON.stringify(localConfig));
@@ -156,8 +154,6 @@
     } catch (e) {
       console.error("Failed to save config:", e);
       toast.error(`Failed to save settings: ${e}`);
-    } finally {
-      isSaving = false;
     }
   }
 
@@ -165,6 +161,15 @@
     if (!originalConfig) return;
     localConfig = JSON.parse(JSON.stringify(originalConfig));
   }
+
+  $effect(() => {
+    if (hasChanges) {
+      showSaveBar(saveConfig, cancelChanges, $_("settings.actions.save"), $_("settings.actions.cancel"));
+    } else {
+      hideSaveBar();
+    }
+    return () => hideSaveBar();
+  });
 
   async function resetToDefaults() {
     await invoke("reset_config");
@@ -381,25 +386,6 @@
       </main>
     </div>
 
-    <!-- Save Bar -->
-    {#if hasChanges}
-      <div
-        class="border-border bg-card fixed right-4 bottom-12 z-60 flex items-center gap-3 border px-4 py-2.5 shadow-lg"
-      >
-        <Button
-          size="sm"
-          variant="ghost"
-          onclick={cancelChanges}
-          disabled={isSaving}
-          class="h-8 px-3"
-        >
-          {$_("settings.actions.cancel")}
-        </Button>
-        <Button size="sm" onclick={saveConfig} disabled={isSaving || isLoading} class="h-8 px-4">
-          {isSaving ? $_("common.loading") : $_("settings.actions.save")}
-        </Button>
-      </div>
-    {/if}
   {:else}
     <div class="flex min-h-[60vh] items-center justify-center px-6">
       <div class="mx-auto w-full max-w-sm text-center">

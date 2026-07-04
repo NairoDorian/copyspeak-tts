@@ -26,7 +26,7 @@ pub fn sanitize_text(text: &str, config: &SanitizationConfig) -> String {
 
     // Pass 1: Strip markdown syntax
     if config.markdown.enabled {
-        result = markdown::strip_markdown(&result);
+        result = markdown::strip_markdown(&result, &config.markdown);
     }
 
     // Pass 2: TTS text normalization

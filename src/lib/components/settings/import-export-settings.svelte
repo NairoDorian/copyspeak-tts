@@ -7,6 +7,7 @@
   import { SettingRow } from "$lib/components/ui/setting-row/index.js";
   import { Upload, Download, RotateCcw, Copy } from "@lucide/svelte";
   import { _ } from "svelte-i18n";
+  import { portal } from "$lib/utils";
 
   let {
     localConfig,
@@ -169,7 +170,7 @@
 
 <!-- Export Dialog -->
 {#if showExportDialog}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+  <div use:portal class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
     <div
       class="bg-card border-border flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg border"
     >
@@ -203,7 +204,7 @@
 
 <!-- Import Dialog -->
 {#if showImportDialog}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+  <div use:portal class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
     <div
       class="bg-card border-border flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg border"
     >
@@ -258,7 +259,7 @@
 
 <!-- Reset Confirmation Dialog -->
 {#if showResetDialog}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+  <div use:portal class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
     <div class="bg-card border-border w-full max-w-sm rounded-lg border p-6">
       <h3 class="mb-2 text-lg font-semibold">Reset All Settings?</h3>
       <p class="text-muted-foreground mb-6">

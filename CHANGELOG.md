@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-07-05
+
+### Added
+
+- **Voice profiles system** — Create, edit, and switch between named voice profiles, each with its own engine, voice, speed, pitch, and effects settings.
+  - New `VoiceProfile` and `ProfileEffects` types; `TtsConfig` now carries `active_profile_id` and `profiles`.
+  - New Profiles page (`/profiles`) with inline profile manager.
+  - New `speak_now_with_profile` Tauri command registered in `main.rs`.
+  - Profiles nav item added to app header.
+
+- **Expanded TTS engine types** — Added `EdgeTtsConfig`, `GoogleTtsConfig`, `MicrosoftTtsConfig`, and `HttpTtsConfig` to `TtsConfig`; `TtsEngine` union extended with `"edge"`, `"google"`, `"microsoft"`, and `"http"`.
+
+- **Engine catalog types** — `EngineCatalogEntry`, `VoiceCatalogEntry`, `EngineOptionDescriptor` interfaces for server-driven engine metadata.
+
+- **Centralized save bar** — Shared `save-bar.svelte.ts` store replaces per-page save bar markup in settings, profiles, and engine pages. Single save bar rendered in `+layout.svelte`.
+
+- **Page motion transitions** — `MotionWrapper` component with fade+slide-up entrance animation on route changes; respects `prefers-reduced-motion` and a `motion-disabled` class.
+
+- **Portal utility** — `portal()` action in `utils.ts` teleports a node to `<body>` so `position:fixed` escapes transformed ancestors.
+
+- **Granular markdown sanitization toggles** — Each markdown strip feature (code blocks, inline code, headers, links, bold/italic, lists, blockquotes) can now be individually enabled/disabled in Settings → Sanitization. Inline code stripping defaults to off to preserve backtick-wrapped terms in technical text.
+
+- **Post-processing providers expanded** — Added `xai`, `aws`, and `cerebras` to `PostProcessingProvider`; new `PostProcessingPromptPreset` type and `selected_prompt_label` / `prompt_presets` fields in `PostProcessingConfig`.
+
+### Changed
+
+- **Markdown stripping respects config** — `strip_markdown()` now accepts `MarkdownSanitizationConfig` and skips disabled features instead of always stripping everything.
+- **Import/export settings refactored** — Internal cleanup of dialog state and validation flow.
+- **Pi extension** — Removed unused `prepareText` wrapper; switched from custom `parseJson` to `JSON.parse`.
+
+### Fixed
+
+- **`speak_now_with_profile`** — Now exposed as a `#[tauri::command]` (was `pub(crate)`) so the frontend can invoke it.
+- **Rust compiler warnings** — Added `#[allow(dead_code)]` on post-processing structs/functions not yet wired to the UI.
+- **Devtools and browser flags** — Main window now enables devtools and sets `--force-prefers-no-reduced-motion`, `--enable-smooth-scrolling`, and file-access flags for local dev.
+
 ## [0.1.6] - 2026-07-04
 
 ### Changed
@@ -306,7 +342,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SSML support removed** — SSML markup passthrough feature removed
 - **Streaming TTS mode removed** — Simplified to paginated synthesis only
 
-[Unreleased]: https://github.com/ilyaizen/CopySpeak/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/ilyaizen/CopySpeak/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/ilyaizen/CopySpeak/compare/v0.1.6...v0.1.7
+[0.1.6]: https://github.com/ilyaizen/CopySpeak/compare/v0.1.5...v0.1.6
+[0.1.5]: https://github.com/ilyaizen/CopySpeak/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/ilyaizen/CopySpeak/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/ilyaizen/CopySpeak/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/ilyaizen/CopySpeak/compare/v0.1.1...v0.1.2

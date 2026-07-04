@@ -20,6 +20,8 @@
     },
     tts: {
       active_backend: "cartesia",
+      active_profile_id: "default",
+      profiles: [],
       preset: "kokoro-tts",
       command: "kokoro-tts",
       args_template: [],
@@ -46,7 +48,11 @@
         voice_name: "Katie",
         output_format: "wav",
         use_manual_voice_id: false
-      }
+      },
+      edge: { voice: "en-US-AvaMultilingualNeural" },
+      google: { api_key: "", model: "", voice_name: "", output_format: "" },
+      microsoft: { api_key: "", endpoint: "", model: "", voice_name: "", output_format: "" },
+      http: { profile_id: "", url_template: "", method: "POST", headers: [], body_template: null, voice: "", response_format: "wav", timeout_secs: 60 }
     },
     playback: {
       on_retrigger: "interrupt",
