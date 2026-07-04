@@ -285,6 +285,37 @@
       "check": "Check",
       "testEngine": "Test Engine"
     },
+    "edge": {
+      "title": "Edge TTS",
+      "description": "Cloud: Microsoft Edge read-aloud voices. Free, no API key required, but needs an internet connection."
+    },
+    "google": {
+      "title": "Google",
+      "description": "Cloud: Gemini API speech generation. Requires a Google AI API key.",
+      "apiKey": "API Key"
+    },
+    "microsoft": {
+      "title": "Microsoft Azure",
+      "description": "Cloud: Azure Cognitive Services Speech. Requires a region endpoint and API key.",
+      "apiKey": "API Key",
+      "endpoint": "Endpoint"
+    },
+    "chatterbox": {
+      "title": "Chatterbox",
+      "description": "Local: Open-source conversational TTS. Requires the chatterbox CLI."
+    },
+    "http": {
+      "title": "HTTP",
+      "description": "Cloud: Send synthesis requests to a custom HTTP endpoint configured per profile."
+    },
+    "setup": {
+      "uvMissing": "uv is not installed. Local engines need it to run.",
+      "installUv": "Install uv",
+      "install": "Install",
+      "installing": "Installing...",
+      "tryAgain": "Try Again",
+      "openInstaller": "Run installer"
+    },
     "badges": {
       "active": "Active",
       "default": "Default",
@@ -373,6 +404,12 @@
       "placeholderOpenai": "sk-...",
       "placeholderElevenlabs": "xi-...",
       "placeholderCartesia": "sk_car_...",
+      "placeholderGoogle": "AIza...",
+      "placeholderMicrosoft": "________________",
+      "endpointLabel": "Endpoint",
+      "endpointPlaceholder": "https://<region>.tts.speech.microsoft.com/",
+      "installButton": "Install",
+      "installing": "Installing...",
       "checkButton": "Check",
       "testButton": "Test",
       "valid": "API Key Valid",

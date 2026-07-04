@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Engine page refactor** — Consolidated `engine-page.svelte` from per-engine subcomponents into a single data-driven panel driven by `ENGINE_TABS`. Removed the cloud-TTS API-key dialog, credential check/test helpers, and unused category metadata; engine settings are now edited inline with a single save flow.
+  - Added `placeholderKey` per engine tab and `install_engine`/`check_command_exists` (uv) wiring for local engines.
+  - Added English locale strings for engine API-key placeholders.
+
 ## [0.1.5] - 2026-05-20
 
 ### Added
