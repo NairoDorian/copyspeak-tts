@@ -1,6 +1,6 @@
 {
-  "name": "copyspeak-tts",
-  "version": "0.1.5",
+  "name": "CopySpeak",
+  "version": "0.1.6",
   "description": "A simple and configurable AI-generated Text-to-Speech (TTS) orchestrator for Windows",
   "type": "module",
   "scripts": {

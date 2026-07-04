@@ -1,6 +1,6 @@
 [package]
-name = "copyspeak-tts"
-version = "0.1.5"
+name = "copyspeak"
+version = "0.1.6"
 edition = "2021"
 description = "CopySpeak — AI text-to-speech orchestrator for Windows"
 

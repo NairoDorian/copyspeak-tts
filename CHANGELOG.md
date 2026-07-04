@@ -5,7 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.6] - 2026-07-04
+
+### Changed
+
+- **Product naming reverted to `CopySpeak`** — Dropped the `-tts` suffix and lowercasing introduced in the 0.1.5 rename. User-facing strings, package identity, and bundle metadata now use `CopySpeak` consistently.
+  - `package.json` and `src-tauri/Cargo.toml` package name: `copyspeak-tts` → `CopySpeak`.
+  - `src-tauri/tauri.conf.json`: `productName`, `publisher`, and main window `title` → `CopySpeak`.
+  - Landing page (hero, footer, screenshots), in-app header, browser title, onboarding, settings tooltips, and HTML history-export titles now read `CopySpeak`.
+  - Locale strings in `en.json` updated (`landing.hero.title`, `screenshots.*`, onboarding/welcome, about, app title, OpenAI engine detail).
+  - `scripts/claude-copyspeak-hook.mjs` running-exe matcher updated for the new `CopySpeak.exe` bundle name.
+- **Tagline now visible** — `Modern AI TTS Orchestrator` (`header.tagline`) is rendered under the in-app header title (was commented out) and added as the landing hero subtitle.
 
 ### Fixed
 

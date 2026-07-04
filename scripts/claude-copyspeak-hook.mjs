@@ -180,7 +180,7 @@ function isCopySpeakRunning() {
       encoding: "utf8",
       windowsHide: true
     });
-    return /^(?:copyspeak(?:-tts)?|CopySpeak TTS)\.exe\s+/im.test(output);
+    return /^(?:copyspeak(?:-tts)?|CopySpeak)\.exe\s+/im.test(output);
   } catch {
     return false;
   }
@@ -189,7 +189,7 @@ function isCopySpeakRunning() {
 function findBuiltCopySpeak() {
   const cwd = process.cwd();
   const candidates = [
-    join(cwd, "src-tauri", "target", "release", "CopySpeak TTS.exe"),
+    join(cwd, "src-tauri", "target", "release", "CopySpeak.exe"),
     join(cwd, "src-tauri", "target", "release", "copyspeak-tts.exe"),
     join(cwd, "src-tauri", "target", "release", "copyspeak.exe"),
     join(cwd, "src-tauri", "target", "debug", "CopySpeak TTS.exe"),

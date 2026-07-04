@@ -10,8 +10,8 @@
   <div class="mx-auto max-w-5xl">
     <div class="flex flex-col items-center justify-between gap-4 sm:flex-row">
       <div class="flex items-center gap-3">
-        <img src="/app-logo.png" alt="CopySpeak TTS" class="h-8 w-8" />
-        <span class="text-foreground font-mono text-sm font-semibold">CopySpeak TTS v{VERSION}</span>
+        <img src="/app-logo.png" alt="CopySpeak" class="h-8 w-8" />
+        <span class="text-foreground font-mono text-sm font-semibold">CopySpeak v{VERSION}</span>
       </div>
 
       <div class="flex items-center gap-6">
