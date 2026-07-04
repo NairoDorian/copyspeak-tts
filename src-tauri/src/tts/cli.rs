@@ -16,7 +16,7 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[cfg(windows)]
-fn get_expanded_path() -> String {
+pub(crate) fn get_expanded_path() -> String {
     use std::collections::HashSet;
     use std::env;
 
@@ -246,6 +246,7 @@ impl CliTtsBackend {
     ) -> Vec<String> {
         let data_dir = Self::data_dir();
         let home_dir = Self::home_dir();
+        let engine_dir = Self::engine_dir();
         let mut args: Vec<String> = self
             .args_template
             .iter()
@@ -257,7 +258,8 @@ impl CliTtsBackend {
                     .replace("{output}", output_path)
                     .replace("{voice}", voice)
                     .replace("{data_dir}", &data_dir)
-                    .replace("{home_dir}", &home_dir);
+                    .replace("{home_dir}", &home_dir)
+                    .replace("{engine_dir}", &engine_dir);
 
                 // Strip surrounding literal quotes which are common when pasting paths in Windows
                 if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
@@ -316,6 +318,18 @@ impl CliTtsBackend {
     fn home_dir() -> String {
         dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// Returns the CopySpeak engines root (e.g. %LOCALAPPDATA%\CopySpeak\engines).
+    /// Used for the {engine_dir} placeholder so uv-managed engine projects can be
+    /// referenced without hardcoding absolute paths in args templates.
+    fn engine_dir() -> String {
+        dirs::data_local_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("CopySpeak")
+            .join("engines")
             .to_string_lossy()
             .into_owned()
     }

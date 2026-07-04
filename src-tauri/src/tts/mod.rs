@@ -3,8 +3,13 @@
 // The app doesn't care how speech is synthesized — only that it gets audio bytes back.
 
 pub mod cartesia;
+pub mod catalog;
 pub mod cli;
+pub mod edge;
 pub mod elevenlabs;
+pub mod google;
+pub mod http;
+pub mod microsoft;
 pub mod openai;
 
 use thiserror::Error;
