@@ -27,45 +27,45 @@ human_verification:
 
 ### Observable Truths
 
-| #   | Truth                                                                          | Status     | Evidence                                                                                     |
-| --- | ------------------------------------------------------------------------------ | ---------- | -------------------------------------------------------------------------------------------- |
-| 1   | User can click an Engine tab in the header and land on the /engine route      | ✓ VERIFIED | app-header.svelte L15: `href: "/engine"`; engine/+page.svelte exists; tests pass             |
-| 2   | Engine tab is visually highlighted when on /engine; inactive tabs are not     | ✓ VERIFIED | app-header.svelte L64-66: `bg-muted text-foreground` when isActive; tests L34-46 verify     |
-| 3   | Navigating away from Engine and back preserves active-tab state via URL       | ✓ VERIFIED | app-header.svelte L56-59: `page.url.pathname.startsWith(item.href)`; tests L59-65 verify    |
-| 4   | Play and Settings tabs continue to work without regression                    | ✓ VERIFIED | app-header.svelte L6-10, L24-29: both entries intact; tests L67-77 verify regression        |
+| #   | Truth                                                                     | Status     | Evidence                                                                                 |
+| --- | ------------------------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------------------- |
+| 1   | User can click an Engine tab in the header and land on the /engine route  | ✓ VERIFIED | app-header.svelte L15: `href: "/engine"`; engine/+page.svelte exists; tests pass         |
+| 2   | Engine tab is visually highlighted when on /engine; inactive tabs are not | ✓ VERIFIED | app-header.svelte L64-66: `bg-muted text-foreground` when isActive; tests L34-46 verify  |
+| 3   | Navigating away from Engine and back preserves active-tab state via URL   | ✓ VERIFIED | app-header.svelte L56-59: `page.url.pathname.startsWith(item.href)`; tests L59-65 verify |
+| 4   | Play and Settings tabs continue to work without regression                | ✓ VERIFIED | app-header.svelte L6-10, L24-29: both entries intact; tests L67-77 verify regression     |
 
 **Score:** 4/4 truths verified
 
 ### Required Artifacts
 
-| Artifact                                          | Expected                               | Status      | Details                                                           |
-| ------------------------------------------------- | -------------------------------------- | ----------- | ----------------------------------------------------------------- |
-| `src/lib/components/layout/app-header.svelte`     | Engine nav item with Cpu icon          | ✓ VERIFIED  | L3: imports Cpu; L12-17: engine entry with id, href, icon        |
-| `src/routes/engine/+page.svelte`                  | Engine stub route page                 | ✓ VERIFIED  | 19 lines; L5: `<title>Engine - CopySpeak TTS</title>`; brutalist card |
-| `src/lib/components/layout/app-header.test.ts`    | Automated tests for NAV-01/02/03       | ✓ VERIFIED  | 78 lines; 5 tests all pass; covers all requirements              |
+| Artifact                                       | Expected                         | Status     | Details                                                           |
+| ---------------------------------------------- | -------------------------------- | ---------- | ----------------------------------------------------------------- |
+| `src/lib/components/layout/app-header.svelte`  | Engine nav item with Cpu icon    | ✓ VERIFIED | L3: imports Cpu; L12-17: engine entry with id, href, icon         |
+| `src/routes/engine/+page.svelte`               | Engine stub route page           | ✓ VERIFIED | 19 lines; L5: `<title>Engine - CopySpeak</title>`; brutalist card |
+| `src/lib/components/layout/app-header.test.ts` | Automated tests for NAV-01/02/03 | ✓ VERIFIED | 78 lines; 5 tests all pass; covers all requirements               |
 
 ### Key Link Verification
 
-| From                                          | To                         | Via                              | Status   | Details                                          |
-| --------------------------------------------- | -------------------------- | -------------------------------- | -------- | ------------------------------------------------ |
-| app-header.svelte                             | /engine route              | href="/engine" in navItems       | ✓ WIRED  | L15: `href: "/engine"`                           |
-| app-header.svelte                             | page.url.pathname          | startsWith(item.href) for isActive | ✓ WIRED | L59: `page.url.pathname.startsWith(item.href)` |
+| From              | To                | Via                                | Status  | Details                                        |
+| ----------------- | ----------------- | ---------------------------------- | ------- | ---------------------------------------------- |
+| app-header.svelte | /engine route     | href="/engine" in navItems         | ✓ WIRED | L15: `href: "/engine"`                         |
+| app-header.svelte | page.url.pathname | startsWith(item.href) for isActive | ✓ WIRED | L59: `page.url.pathname.startsWith(item.href)` |
 
 ### Requirements Coverage
 
-| Requirement | Source Plan | Description                                              | Status       | Evidence                                                                         |
-| ----------- | ----------- | -------------------------------------------------------- | ------------ | -------------------------------------------------------------------------------- |
-| NAV-01      | 01-01-PLAN  | User can navigate between Play, Engine, Settings tabs    | ✓ SATISFIED  | app-header.svelte has all three nav items; test L26-32 verifies Engine link      |
-| NAV-02      | 01-01-PLAN  | Active tab is visually highlighted                       | ✓ SATISFIED  | app-header.svelte L64-66 applies bg-muted; tests L34-57 verify active states     |
-| NAV-03      | 01-01-PLAN  | Tab state preserved via URL                              | ✓ SATISFIED  | app-header.svelte L56-59 uses pathname; test L59-65 verifies URL-driven state    |
+| Requirement | Source Plan | Description                                           | Status      | Evidence                                                                      |
+| ----------- | ----------- | ----------------------------------------------------- | ----------- | ----------------------------------------------------------------------------- |
+| NAV-01      | 01-01-PLAN  | User can navigate between Play, Engine, Settings tabs | ✓ SATISFIED | app-header.svelte has all three nav items; test L26-32 verifies Engine link   |
+| NAV-02      | 01-01-PLAN  | Active tab is visually highlighted                    | ✓ SATISFIED | app-header.svelte L64-66 applies bg-muted; tests L34-57 verify active states  |
+| NAV-03      | 01-01-PLAN  | Tab state preserved via URL                           | ✓ SATISFIED | app-header.svelte L56-59 uses pathname; test L59-65 verifies URL-driven state |
 
 **Orphaned Requirements:** None — all requirements from PLAN frontmatter are covered.
 
 ### Anti-Patterns Found
 
-| File                                  | Line | Pattern          | Severity | Impact                                                |
-| ------------------------------------- | ---- | ---------------- | -------- | ----------------------------------------------------- |
-| src/routes/engine/+page.svelte        | 15   | "coming soon"    | ℹ️ Info  | Intentional stub design per PLAN — not a blocker      |
+| File                           | Line | Pattern       | Severity | Impact                                           |
+| ------------------------------ | ---- | ------------- | -------- | ------------------------------------------------ |
+| src/routes/engine/+page.svelte | 15   | "coming soon" | ℹ️ Info   | Intentional stub design per PLAN — not a blocker |
 
 **Note:** The "coming soon" text is explicitly part of the stub page design specified in the PLAN. This is not a gap.
 

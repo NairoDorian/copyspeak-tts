@@ -126,47 +126,47 @@ Settings refactor phase. The move must be atomic: add Engine route, move TTS UI,
 
 ## Technical Debt Patterns
 
-| Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
-|----------|-------------------|----------------|-----------------|
-| Keep `localConfig` local to each page component | Simple, no shared store needed | Config state lost on navigation; both pages fight over the same backend state | Never — once there are 2+ routes that edit config, local-only state is broken |
-| Copy `TtsSettings` component instead of moving it | Faster to implement Engine route | Permanent divergence of two UIs editing the same config fields | Never |
-| Run health check in `+layout.ts` load function | Looks clean, runs early | Tauri API not available; invoke silently fails | Never |
-| Block entire app startup on health check result | Forces user to fix config before using app | Users with broken engines can't reach Play tab to use cached/last-good audio | Never for tray apps — use non-blocking notice |
-| Collapse all startup `onMount` logic into one block | Fewer lifecycle hooks | Single failure aborts all setup (listeners + appearance + health check all fail together) | Only acceptable if failures are completely independent |
+| Shortcut                                            | Immediate Benefit                          | Long-term Cost                                                                            | When Acceptable                                                               |
+| --------------------------------------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Keep `localConfig` local to each page component     | Simple, no shared store needed             | Config state lost on navigation; both pages fight over the same backend state             | Never — once there are 2+ routes that edit config, local-only state is broken |
+| Copy `TtsSettings` component instead of moving it   | Faster to implement Engine route           | Permanent divergence of two UIs editing the same config fields                            | Never                                                                         |
+| Run health check in `+layout.ts` load function      | Looks clean, runs early                    | Tauri API not available; invoke silently fails                                            | Never                                                                         |
+| Block entire app startup on health check result     | Forces user to fix config before using app | Users with broken engines can't reach Play tab to use cached/last-good audio              | Never for tray apps — use non-blocking notice                                 |
+| Collapse all startup `onMount` logic into one block | Fewer lifecycle hooks                      | Single failure aborts all setup (listeners + appearance + health check all fail together) | Only acceptable if failures are completely independent                        |
 
 ---
 
 ## Integration Gotchas
 
-| Integration | Common Mistake | Correct Approach |
-|-------------|----------------|------------------|
-| Tauri IPC — new commands | Adding `#[tauri::command]` without updating `generate_handler!` | Always update `generate_handler!` in the same commit as the new command |
-| Tauri IPC — event listeners across routes | Re-registering `listen()` inside page components instead of layout | Register persistent listeners once in `+layout.svelte onMount`; page components should not call `listen()` for app-level events |
-| SvelteKit beforeNavigate guard | Calling `beforeNavigate` inside a non-component context (store, service) | Must be called during component initialization inside a `+page.svelte` or `+layout.svelte` |
-| Config save on Engine route | Engine route calls `set_config` with only partial TTS fields, discarding other config sections | Always pass the full `AppConfig` object to `set_config`; merge TTS changes into a complete config clone before invoking |
-| `$app/state` `page` store | Using `page.url.pathname` before the router has initialized (during `+layout.ts` load) | Only read `page.url.pathname` inside component scripts or `onMount`; it is reactive and correct after hydration |
+| Integration                               | Common Mistake                                                                                 | Correct Approach                                                                                                                |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Tauri IPC — new commands                  | Adding `#[tauri::command]` without updating `generate_handler!`                                | Always update `generate_handler!` in the same commit as the new command                                                         |
+| Tauri IPC — event listeners across routes | Re-registering `listen()` inside page components instead of layout                             | Register persistent listeners once in `+layout.svelte onMount`; page components should not call `listen()` for app-level events |
+| SvelteKit beforeNavigate guard            | Calling `beforeNavigate` inside a non-component context (store, service)                       | Must be called during component initialization inside a `+page.svelte` or `+layout.svelte`                                      |
+| Config save on Engine route               | Engine route calls `set_config` with only partial TTS fields, discarding other config sections | Always pass the full `AppConfig` object to `set_config`; merge TTS changes into a complete config clone before invoking         |
+| `$app/state` `page` store                 | Using `page.url.pathname` before the router has initialized (during `+layout.ts` load)         | Only read `page.url.pathname` inside component scripts or `onMount`; it is reactive and correct after hydration                 |
 
 ---
 
 ## Performance Traps
 
-| Trap | Symptoms | Prevention | When It Breaks |
-|------|----------|------------|----------------|
-| Health check blocks initial render | App shows blank window for 1-3 seconds on startup | Make health check non-blocking; render layout immediately, show check result async | Every startup — not a scale issue, a UX issue |
-| `get_config` called redundantly on every route visit | Network-equivalent latency to `%APPDATA%` on every tab switch | Cache config in a module-level store after first load; invalidate only on explicit save | Noticeable if settings sections have many `onMount` calls |
-| `loadConfig()` called both on Settings and Engine `onMount` with no shared cache | Two round-trips to Rust on every tab change | Shared config store with a "loaded" flag | Perceptible on spinning-disk machines |
+| Trap                                                                             | Symptoms                                                      | Prevention                                                                              | When It Breaks                                            |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| Health check blocks initial render                                               | App shows blank window for 1-3 seconds on startup             | Make health check non-blocking; render layout immediately, show check result async      | Every startup — not a scale issue, a UX issue             |
+| `get_config` called redundantly on every route visit                             | Network-equivalent latency to `%APPDATA%` on every tab switch | Cache config in a module-level store after first load; invalidate only on explicit save | Noticeable if settings sections have many `onMount` calls |
+| `loadConfig()` called both on Settings and Engine `onMount` with no shared cache | Two round-trips to Rust on every tab change                   | Shared config store with a "loaded" flag                                                | Perceptible on spinning-disk machines                     |
 
 ---
 
 ## UX Pitfalls
 
-| Pitfall | User Impact | Better Approach |
-|---------|-------------|-----------------|
-| Health check failure shown as modal blocking the app | User cannot access Play tab if engine is misconfigured, even to listen to history | Show health check result as a dismissible banner on the Engine tab or a toast; never block the Play tab |
-| No unsaved-changes indicator when navigating away from Settings or Engine | User makes changes, clicks another tab, returns to find edits gone | Show a subtle "Unsaved changes" badge on the tab or use `beforeNavigate` to confirm discard |
-| Engine tab shown in nav even when no engine is configured yet | User clicks Engine tab and sees a blank or error state with no guidance | If health check fails on startup, highlight the Engine tab (e.g., an orange dot) to draw attention without blocking the app |
-| Settings page still showing TTS engine section after it moves to Engine route | Duplicate controls; saving from Settings silently overwrites Engine settings | Complete the settings split before shipping the Engine route |
-| 3-tab navigation with no visual indicator of active route | Users lose their place, especially if they opened the window from the tray | The existing `page.url.pathname` active-class pattern in `app-header.svelte` must be extended to include the new Engine tab — do not leave it commented out |
+| Pitfall                                                                       | User Impact                                                                       | Better Approach                                                                                                                                             |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Health check failure shown as modal blocking the app                          | User cannot access Play tab if engine is misconfigured, even to listen to history | Show health check result as a dismissible banner on the Engine tab or a toast; never block the Play tab                                                     |
+| No unsaved-changes indicator when navigating away from Settings or Engine     | User makes changes, clicks another tab, returns to find edits gone                | Show a subtle "Unsaved changes" badge on the tab or use `beforeNavigate` to confirm discard                                                                 |
+| Engine tab shown in nav even when no engine is configured yet                 | User clicks Engine tab and sees a blank or error state with no guidance           | If health check fails on startup, highlight the Engine tab (e.g., an orange dot) to draw attention without blocking the app                                 |
+| Settings page still showing TTS engine section after it moves to Engine route | Duplicate controls; saving from Settings silently overwrites Engine settings      | Complete the settings split before shipping the Engine route                                                                                                |
+| 3-tab navigation with no visual indicator of active route                     | Users lose their place, especially if they opened the window from the tray        | The existing `page.url.pathname` active-class pattern in `app-header.svelte` must be extended to include the new Engine tab — do not leave it commented out |
 
 ---
 
@@ -184,26 +184,26 @@ Settings refactor phase. The move must be atomic: add Engine route, move TTS UI,
 
 ## Recovery Strategies
 
-| Pitfall | Recovery Cost | Recovery Steps |
-|---------|---------------|----------------|
-| TTS config duplicated across two routes | MEDIUM | Hard-delete TTS section from Settings; consolidate into Engine route component; re-test config save/load round-trip |
-| Listeners double-registered | LOW | Add guard variable (`if (unlistenSpeak) return`) and unlisten before re-registering; add dev-mode console.count probe |
-| New IPC command unreachable | LOW | Add command name to `generate_handler!` list; rebuild; no frontend changes needed |
-| Config state lost on navigation | MEDIUM | Extract `localConfig` draft into a `.svelte.ts` module-level store; update both route components to read/write from store instead of local `$state` |
-| Health check blocking startup | LOW | Move `invoke` call into `onMount`; change result handling from blocking to async notification |
+| Pitfall                                 | Recovery Cost | Recovery Steps                                                                                                                                      |
+| --------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TTS config duplicated across two routes | MEDIUM        | Hard-delete TTS section from Settings; consolidate into Engine route component; re-test config save/load round-trip                                 |
+| Listeners double-registered             | LOW           | Add guard variable (`if (unlistenSpeak) return`) and unlisten before re-registering; add dev-mode console.count probe                               |
+| New IPC command unreachable             | LOW           | Add command name to `generate_handler!` list; rebuild; no frontend changes needed                                                                   |
+| Config state lost on navigation         | MEDIUM        | Extract `localConfig` draft into a `.svelte.ts` module-level store; update both route components to read/write from store instead of local `$state` |
+| Health check blocking startup           | LOW           | Move `invoke` call into `onMount`; change result handling from blocking to async notification                                                       |
 
 ---
 
 ## Pitfall-to-Phase Mapping
 
-| Pitfall | Prevention Phase | Verification |
-|---------|------------------|--------------|
-| Unsaved settings state lost on navigation | Settings split phase (before Engine route ships) | Navigate Play → Settings → Engine → Settings; unsaved changes must survive the round-trip |
-| Event listeners double-registered in layout | Navigation / layout phase | Navigate all three routes; confirm `speak-request` fires exactly once per clipboard copy |
-| Startup health check race condition | Health check implementation phase | Kill the TTS binary; restart app; verify app opens without hanging and Play tab is reachable |
-| New IPC commands not in `generate_handler!` | Engine route implementation phase | Frontend smoke test calls each new command and asserts no IPC rejection |
-| TTS config duplicated across routes | Settings split phase | Grep for TTS field references in `src/routes/settings/`; must return zero results for moved fields |
-| Engine tab missing from navigation | Navigation phase | Visual smoke test: all three tabs render with correct active state |
+| Pitfall                                     | Prevention Phase                                 | Verification                                                                                       |
+| ------------------------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| Unsaved settings state lost on navigation   | Settings split phase (before Engine route ships) | Navigate Play → Settings → Engine → Settings; unsaved changes must survive the round-trip          |
+| Event listeners double-registered in layout | Navigation / layout phase                        | Navigate all three routes; confirm `speak-request` fires exactly once per clipboard copy           |
+| Startup health check race condition         | Health check implementation phase                | Kill the TTS binary; restart app; verify app opens without hanging and Play tab is reachable       |
+| New IPC commands not in `generate_handler!` | Engine route implementation phase                | Frontend smoke test calls each new command and asserts no IPC rejection                            |
+| TTS config duplicated across routes         | Settings split phase                             | Grep for TTS field references in `src/routes/settings/`; must return zero results for moved fields |
+| Engine tab missing from navigation          | Navigation phase                                 | Visual smoke test: all three tabs render with correct active state                                 |
 
 ---
 
@@ -221,5 +221,5 @@ Settings refactor phase. The move must be atomic: add Engine route, move TTS UI,
 - Codebase analysis: `src/routes/+layout.svelte`, `src/routes/settings/+page.svelte`, `src-tauri/src/commands/config.rs`, `src-tauri/src/main.rs` — direct inspection (HIGH confidence)
 
 ---
-*Pitfalls research for: CopySpeak TTS — multi-route navigation and startup onboarding (Tauri v2 + Svelte 5 + SvelteKit)*
+*Pitfalls research for: CopySpeak — multi-route navigation and startup onboarding (Tauri v2 + Svelte 5 + SvelteKit)*
 *Researched: 2026-03-04*

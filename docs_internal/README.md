@@ -16,7 +16,7 @@ This directory is the repo-local internal docs surface for `copyspeak-tts`.
 
 ## Rule
 
-Treat these docs as operational source of truth for the rename. The app was renamed from `CopySpeak` to `CopySpeak TTS`, the repo is now lowercase `copyspeak-tts`, and the updater/release URLs were switched to the new repo.
+Treat these docs as operational source of truth for the rename. The app was renamed from `CopySpeak` to `CopySpeak`, the repo is now lowercase `copyspeak-tts`, and the updater/release URLs were switched to the new repo.
 
 ## Note
 

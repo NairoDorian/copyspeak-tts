@@ -1,4 +1,4 @@
-# Requirements: CopySpeak TTS
+# Requirements: CopySpeak
 
 **Defined:** 2026-03-26
 **Core Value:** Double-copy → instant speech must be flawless
@@ -39,14 +39,14 @@ Explicitly excluded. Documented to prevent scope creep.
 
 Which phases cover which requirements. Updated during roadmap creation.
 
-| Requirement | Phase    | Status  |
-| ----------- | -------- | ------- |
+| Requirement | Phase    | Status   |
+| ----------- | -------- | -------- |
 | SETT-01     | Phase 10 | Complete |
 | SETT-02     | Phase 10 | Complete |
 | SETT-03     | Phase 10 | Complete |
-| SETT-05     | Phase 11 | Pending |
-| SETT-06     | Phase 11 | Pending |
-| SETT-07     | Phase 11 | Pending |
+| SETT-05     | Phase 11 | Pending  |
+| SETT-06     | Phase 11 | Pending  |
+| SETT-07     | Phase 11 | Pending  |
 | SETT-08     | Phase 10 | Complete |
 | SETT-09     | Phase 10 | Complete |
 

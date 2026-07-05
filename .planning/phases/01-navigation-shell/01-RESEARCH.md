@@ -22,11 +22,11 @@ None — discussion stayed within phase scope.
 <phase_requirements>
 ## Phase Requirements
 
-| ID | Description | Research Support |
-|----|-------------|-----------------|
-| NAV-01 | User can navigate between Play, Engine, and Settings tabs via header | Confirmed: add one object to `navItems` array in `app-header.svelte`; create `src/routes/engine/+page.svelte` |
-| NAV-02 | Active tab is visually highlighted | Confirmed: existing `isActive` logic uses `page.url.pathname.startsWith(item.href)` — zero changes needed for `/engine` route |
-| NAV-03 | Tab state is preserved via URL (no reset on tray open/close) | Confirmed: SvelteKit URL-driven routing inherently preserves state; no special handling required |
+| ID     | Description                                                          | Research Support                                                                                                              |
+| ------ | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| NAV-01 | User can navigate between Play, Engine, and Settings tabs via header | Confirmed: add one object to `navItems` array in `app-header.svelte`; create `src/routes/engine/+page.svelte`                 |
+| NAV-02 | Active tab is visually highlighted                                   | Confirmed: existing `isActive` logic uses `page.url.pathname.startsWith(item.href)` — zero changes needed for `/engine` route |
+| NAV-03 | Tab state is preserved via URL (no reset on tray open/close)         | Confirmed: SvelteKit URL-driven routing inherently preserves state; no special handling required                              |
 </phase_requirements>
 
 ---
@@ -47,11 +47,11 @@ The only genuine decision is icon selection. `Cpu` from `@lucide/svelte` is the 
 
 ### Core (already installed — no new dependencies)
 
-| Library | Version | Purpose | Why Standard |
-|---------|---------|---------|--------------|
-| `@sveltejs/kit` | ^2.50.2 | File-based routing, `page` store | Already in project, SvelteKit's router handles all nav state |
-| `@lucide/svelte` | ^0.561.0 | Tab icons | Already imported in `app-header.svelte` for Play/Settings |
-| Svelte 5 | ^5.49.2 | Reactive UI with runes | Project standard; `$app/state` page store is Svelte 5 compatible |
+| Library          | Version  | Purpose                          | Why Standard                                                     |
+| ---------------- | -------- | -------------------------------- | ---------------------------------------------------------------- |
+| `@sveltejs/kit`  | ^2.50.2  | File-based routing, `page` store | Already in project, SvelteKit's router handles all nav state     |
+| `@lucide/svelte` | ^0.561.0 | Tab icons                        | Already imported in `app-header.svelte` for Play/Settings        |
+| Svelte 5         | ^5.49.2  | Reactive UI with runes           | Project standard; `$app/state` page store is Svelte 5 compatible |
 
 ### No New Installations Required
 
@@ -133,7 +133,7 @@ const isActive =
 ```svelte
 <!-- Source: pattern from src/routes/+page.svelte structure -->
 <svelte:head>
-  <title>Engine - CopySpeak TTS</title>
+  <title>Engine - CopySpeak</title>
 </svelte:head>
 
 <div class="w-full max-w-6xl mx-auto">
@@ -163,11 +163,11 @@ const isActive =
 
 ## Don't Hand-Roll
 
-| Problem | Don't Build | Use Instead | Why |
-|---------|-------------|-------------|-----|
-| Active tab state | Custom store or class toggling | `page.url.pathname` from `$app/state` | SvelteKit's reactive page store is always in sync with the URL; manual state tracking diverges on back/forward navigation |
-| Tab routing | Manual click handlers + conditional rendering | `<a href="/engine">` + SvelteKit file routing | File-based routing handles history, back/forward, deep links automatically |
-| Icon imports | Custom SVG inline | `@lucide/svelte` (already installed) | Consistent sizing, accessibility props, tree-shaken |
+| Problem          | Don't Build                                   | Use Instead                                   | Why                                                                                                                       |
+| ---------------- | --------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Active tab state | Custom store or class toggling                | `page.url.pathname` from `$app/state`         | SvelteKit's reactive page store is always in sync with the URL; manual state tracking diverges on back/forward navigation |
+| Tab routing      | Manual click handlers + conditional rendering | `<a href="/engine">` + SvelteKit file routing | File-based routing handles history, back/forward, deep links automatically                                                |
+| Icon imports     | Custom SVG inline                             | `@lucide/svelte` (already installed)          | Consistent sizing, accessibility props, tree-shaken                                                                       |
 
 **Key insight:** The entire feature is already built — the loop, the active detection, the styling. Adding Engine is filling in one array slot and creating one file.
 
@@ -188,9 +188,9 @@ const isActive =
 **Warning signs:** Play tab stays highlighted when on Engine page (would mean the guard was removed).
 
 ### Pitfall 3: Missing `<svelte:head>` title
-**What goes wrong:** Browser tab shows "CopySpeak TTS" but no page-specific title, making it harder to distinguish routes during development.
+**What goes wrong:** Browser tab shows "CopySpeak" but no page-specific title, making it harder to distinguish routes during development.
 **Why it happens:** Forgetting `<svelte:head>` on the stub page.
-**How to avoid:** Include `<title>Engine - CopySpeak TTS</title>` in a `<svelte:head>` block (see existing `+page.svelte` for pattern).
+**How to avoid:** Include `<title>Engine - CopySpeak</title>` in a `<svelte:head>` block (see existing `+page.svelte` for pattern).
 
 ---
 
@@ -253,10 +253,10 @@ const navItems = [
 
 ## State of the Art
 
-| Old Approach | Current Approach | When Changed | Impact |
-|--------------|------------------|--------------|--------|
+| Old Approach                     | Current Approach                         | When Changed           | Impact                                                                       |
+| -------------------------------- | ---------------------------------------- | ---------------------- | ---------------------------------------------------------------------------- |
 | `$page` store from `$app/stores` | `page` from `$app/state` (Svelte 5 rune) | SvelteKit 2 + Svelte 5 | `page.url.pathname` is reactive without `$` prefix — already used in project |
-| `on:click` event directive | `onclick` attribute | Svelte 5 | Project CLAUDE.md mandates `onclick` not `on:click` |
+| `on:click` event directive       | `onclick` attribute                      | Svelte 5               | Project CLAUDE.md mandates `onclick` not `on:click`                          |
 
 **Deprecated/outdated:**
 - `import { page } from "$app/stores"` and `$page.url.pathname`: The project already uses the Svelte 5 `$app/state` form (`page.url.pathname` without `$` prefix). Do not revert to stores form.
@@ -273,20 +273,20 @@ None. Phase scope is fully understood from existing source code inspection. No e
 
 ### Test Framework
 
-| Property | Value |
-|----------|-------|
-| Framework | Vitest 4.0.18 |
-| Config file | `/home/ubuntu/CopySpeak TTS/vitest.config.ts` |
-| Quick run command | `bun run test` |
-| Full suite command | `bun run test` |
+| Property           | Value                                     |
+| ------------------ | ----------------------------------------- |
+| Framework          | Vitest 4.0.18                             |
+| Config file        | `/home/ubuntu/CopySpeak/vitest.config.ts` |
+| Quick run command  | `bun run test`                            |
+| Full suite command | `bun run test`                            |
 
 ### Phase Requirements → Test Map
 
-| Req ID | Behavior | Test Type | Automated Command | File Exists? |
-|--------|----------|-----------|-------------------|-------------|
-| NAV-01 | Engine tab renders in header and links to `/engine` | unit (component) | `bun run test src/lib/components/layout/app-header.test.ts` | ❌ Wave 0 |
-| NAV-02 | Active tab has `bg-muted text-foreground` class; inactive does not | unit (component) | `bun run test src/lib/components/layout/app-header.test.ts` | ❌ Wave 0 |
-| NAV-03 | Navigating to `/engine` sets `aria-current="page"` on Engine tab | unit (component) | `bun run test src/lib/components/layout/app-header.test.ts` | ❌ Wave 0 |
+| Req ID | Behavior                                                           | Test Type        | Automated Command                                           | File Exists? |
+| ------ | ------------------------------------------------------------------ | ---------------- | ----------------------------------------------------------- | ------------ |
+| NAV-01 | Engine tab renders in header and links to `/engine`                | unit (component) | `bun run test src/lib/components/layout/app-header.test.ts` | ❌ Wave 0     |
+| NAV-02 | Active tab has `bg-muted text-foreground` class; inactive does not | unit (component) | `bun run test src/lib/components/layout/app-header.test.ts` | ❌ Wave 0     |
+| NAV-03 | Navigating to `/engine` sets `aria-current="page"` on Engine tab   | unit (component) | `bun run test src/lib/components/layout/app-header.test.ts` | ❌ Wave 0     |
 
 ### Sampling Rate
 - **Per task commit:** `bun run test`
@@ -308,9 +308,9 @@ None. Phase scope is fully understood from existing source code inspection. No e
 ## Sources
 
 ### Primary (HIGH confidence)
-- Direct source code inspection: `/home/ubuntu/CopySpeak TTS/src/lib/components/layout/app-header.svelte` — all patterns verified from live file
-- Direct source code inspection: `/home/ubuntu/CopySpeak TTS/src/routes/+page.svelte` and `settings/+page.svelte` — stub page aesthetic reference
-- `/home/ubuntu/CopySpeak TTS/vitest.config.ts` — test framework configuration verified
+- Direct source code inspection: `/home/ubuntu/CopySpeak/src/lib/components/layout/app-header.svelte` — all patterns verified from live file
+- Direct source code inspection: `/home/ubuntu/CopySpeak/src/routes/+page.svelte` and `settings/+page.svelte` — stub page aesthetic reference
+- `/home/ubuntu/CopySpeak/vitest.config.ts` — test framework configuration verified
 
 ### Secondary (MEDIUM confidence)
 - `@lucide/svelte` package.json version `^0.561.0` — `Cpu` icon confirmed available in Lucide icon set (stable, high availability in all recent versions)

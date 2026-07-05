@@ -1,13 +1,13 @@
 # Project Research Summary
 
-**Project:** CopySpeak TTS — TTS Engine Configuration Page + 3-Tab Navigation
+**Project:** CopySpeak — TTS Engine Configuration Page + 3-Tab Navigation
 **Domain:** Tauri v2 + SvelteKit desktop app — multi-route navigation with engine config extraction
 **Researched:** 2026-03-04
 **Confidence:** HIGH
 
 ## Executive Summary
 
-CopySpeak TTS is a Tauri v2 + SvelteKit desktop tray app that reads clipboard text and speaks it via configurable TTS backends (CLI, ElevenLabs, OpenAI, HTTP). This milestone introduces a dedicated Engine configuration route extracted from the Settings page, adds a third tab to the navigation (Play / Engine / Settings), and implements a non-blocking startup health check that routes users to the Engine page when their TTS backend is broken or unconfigured. The full implementation requires zero new Rust IPC commands — all backend infrastructure (`test_tts_engine`, `list_elevenlabs_voices`, `get_config`, `set_config`) is already in place. This is primarily a frontend restructuring task with well-understood patterns.
+CopySpeak is a Tauri v2 + SvelteKit desktop tray app that reads clipboard text and speaks it via configurable TTS backends (CLI, ElevenLabs, OpenAI, HTTP). This milestone introduces a dedicated Engine configuration route extracted from the Settings page, adds a third tab to the navigation (Play / Engine / Settings), and implements a non-blocking startup health check that routes users to the Engine page when their TTS backend is broken or unconfigured. The full implementation requires zero new Rust IPC commands — all backend infrastructure (`test_tts_engine`, `list_elevenlabs_voices`, `get_config`, `set_config`) is already in place. This is primarily a frontend restructuring task with well-understood patterns.
 
 The recommended approach is to use SvelteKit's existing file-system router to add an `/engine` route alongside the existing `/` and `/settings` routes. Navigation uses `<a href="/engine">` links and `$app/state page` for active-route detection — identical to the existing pattern in `app-header.svelte`. The `TtsSettings` component is moved (not copied) from Settings to the Engine route, and the startup health check is wired into `+layout.svelte`'s `onMount`. No new packages, no new routing library, and no Rust changes are required for the core milestone features.
 
@@ -169,12 +169,12 @@ Phases with standard patterns (skip research-phase):
 
 ## Confidence Assessment
 
-| Area | Confidence | Notes |
-|------|------------|-------|
-| Stack | HIGH | Direct codebase inspection; no new dependencies; existing patterns confirmed in source |
-| Features | MEDIUM | Analogous products analyzed (Home Assistant, AllTalk TTS, VS Code); no direct user research; P1 features are grounded in existing codebase scope; P2+ features have more uncertainty |
-| Architecture | HIGH | All components exist; all IPC commands confirmed in Rust source; patterns drawn from Settings page which already works |
-| Pitfalls | HIGH | Backed by official Tauri v2 docs, SvelteKit docs, and confirmed GitHub issues; codebase patterns validated against pitfall checklist |
+| Area         | Confidence | Notes                                                                                                                                                                                |
+| ------------ | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Stack        | HIGH       | Direct codebase inspection; no new dependencies; existing patterns confirmed in source                                                                                               |
+| Features     | MEDIUM     | Analogous products analyzed (Home Assistant, AllTalk TTS, VS Code); no direct user research; P1 features are grounded in existing codebase scope; P2+ features have more uncertainty |
+| Architecture | HIGH       | All components exist; all IPC commands confirmed in Rust source; patterns drawn from Settings page which already works                                                               |
+| Pitfalls     | HIGH       | Backed by official Tauri v2 docs, SvelteKit docs, and confirmed GitHub issues; codebase patterns validated against pitfall checklist                                                 |
 
 **Overall confidence:** HIGH
 

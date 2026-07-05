@@ -1,5 +1,5 @@
 ---
-title: Major Rename: CopySpeak to CopySpeak TTS
+title: Major Rename: CopySpeak to CopySpeak
 status: active
 created: 2026-05-31
 updated: 2026-05-31
@@ -10,15 +10,15 @@ tags:
   - updater
 ---
 
-# Major Rename: CopySpeak -> CopySpeak TTS
+# Major Rename: CopySpeak -> CopySpeak
 
 ## What changed
 
 - GitHub repository renamed from `ilyaizen/CopySpeak` to `ilyaizen/copyspeak-tts`.
-- Product branding changed to `CopySpeak TTS`.
+- Product branding changed to `CopySpeak`.
 - Local repo name and clone path changed to lowercase `copyspeak-tts`.
 - GitHub URLs and release URLs were updated across the repo.
-- Tauri product/window/publisher strings now use `CopySpeak TTS`.
+- Tauri product/window/publisher strings now use `CopySpeak`.
 
 ## Updater status
 
@@ -39,7 +39,7 @@ No workflow code depended on the old repo slug.
 
 What to watch on the next release:
 
-- release name should remain `CopySpeak TTS vX.Y.Z`
+- release name should remain `CopySpeak vX.Y.Z`
 - release assets should still be uploaded to the renamed repo
 - the new release should publish `latest.json` in the renamed repo so the updater has a live feed
 
@@ -51,7 +51,7 @@ What to watch on the next release:
 ## Verification checklist
 
 - repo URL resolves to `https://github.com/ilyaizen/copyspeak-tts`
-- app metadata says `CopySpeak TTS`
+- app metadata says `CopySpeak`
 - release workflow still points at the current repo context
 - updater URL is the new repo URL
 - the next build publishes a fresh release from the renamed repo

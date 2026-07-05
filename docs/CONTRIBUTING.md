@@ -1,10 +1,10 @@
-# Contributing to CopySpeak TTS
+# Contributing to CopySpeak
 
-Thank you for your interest in contributing to CopySpeak TTS! This guide will help you get started with contributing to this open source text-to-speech application.
+Thank you for your interest in contributing to CopySpeak! This guide will help you get started with contributing to this open source text-to-speech application.
 
 ## 📖 Philosophy
 
-CopySpeak TTS aims to make AI text-to-speech accessible to everyone. The goal is to create both a useful tool and a foundation for others to build upon—a well-patterned, simple codebase that serves the community. We prioritize:
+CopySpeak aims to make AI text-to-speech accessible to everyone. The goal is to create both a useful tool and a foundation for others to build upon—a well-patterned, simple codebase that serves the community. We prioritize:
 
 - **Simplicity**: Clear, maintainable code over clever solutions
 - **Extensibility**: Make it easy for others to fork and customize
@@ -50,7 +50,7 @@ Before you begin, ensure you have the following installed:
 
 ### Understanding the Codebase
 
-CopySpeak TTS follows a clean architecture pattern:
+CopySpeak follows a clean architecture pattern:
 
 **Backend (Rust - `src-tauri/src/`):**
 
@@ -74,8 +74,8 @@ CopySpeak TTS follows a clean architecture pattern:
 
 ### Before Submitting a Bug Report
 
-1. **Search existing issues** at [github.com/ilyaizen/CopySpeak TTS/issues](https://github.com/ilyaizen/copyspeak-tts/issues)
-2. **Check discussions** at [github.com/ilyaizen/CopySpeak TTS/discussions](https://github.com/ilyaizen/copyspeak-tts/discussions)
+1. **Search existing issues** at [github.com/ilyaizen/CopySpeak/issues](https://github.com/ilyaizen/copyspeak-tts/issues)
+2. **Check discussions** at [github.com/ilyaizen/CopySpeak/discussions](https://github.com/ilyaizen/copyspeak-tts/discussions)
 3. **Try the latest release** to see if the issue has been fixed
 
 ### Submitting a Bug Report
@@ -111,7 +111,7 @@ We use GitHub Discussions for feature requests rather than issues. This keeps is
    - The problem you're trying to solve
    - Your proposed solution
    - Any alternatives you've considered
-   - How it fits with CopySpeak TTS's philosophy
+   - How it fits with CopySpeak's philosophy
 
 ## 🔧 Making Code Contributions
 
@@ -130,9 +130,9 @@ We use GitHub Discussions for feature requests rather than issues. This keeps is
    - Gather community feedback first via [Discussions](https://github.com/ilyaizen/copyspeak-tts/discussions)
    - Link to that discussion in your PR
 
-3. **Get community feedback for features** - PRs with demonstrated community interest are **much more likely to be merged**. Start a discussion, get feedback, and link to it in your PR. This helps ensure CopySpeak TTS stays focused and useful for the most people without becoming bloated.
+3. **Get community feedback for features** - PRs with demonstrated community interest are **much more likely to be merged**. Start a discussion, get feedback, and link to it in your PR. This helps ensure CopySpeak stays focused and useful for the most people without becoming bloated.
 
-Community feedback is essential to keeping CopySpeak TTS the best it can be for everyone. It helps prioritize what matters most and prevents feature creep.
+Community feedback is essential to keeping CopySpeak the best it can be for everyone. It helps prioritize what matters most and prevents feature creep.
 
 ### Development Workflow
 
@@ -186,7 +186,7 @@ Community feedback is essential to keeping CopySpeak TTS the best it can be for 
    ```
 
 7. **Create a Pull Request**:
-   - Go to the [CopySpeak TTS repository](https://github.com/ilyaizen/copyspeak-tts)
+   - Go to the [CopySpeak repository](https://github.com/ilyaizen/copyspeak-tts)
    - Click "New Pull Request"
    - Select your fork and branch
    - Fill out the PR template completely, including:
@@ -312,4 +312,4 @@ Look for issues labeled `good first issue` or `help wanted` if you're new to the
 
 ---
 
-**Thank you for contributing to CopySpeak TTS!** Your efforts help make text-to-speech technology more accessible and extensible for everyone.
+**Thank you for contributing to CopySpeak!** Your efforts help make text-to-speech technology more accessible and extensible for everyone.

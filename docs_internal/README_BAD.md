@@ -1,6 +1,6 @@
 # Internal Documentation
 
-This directory mirrors the repo-local `docs_internal/` surface for the CopySpeak TTS rename.
+This directory mirrors the repo-local `docs_internal/` surface for the CopySpeak rename.
 
 ## Canonical locations
 

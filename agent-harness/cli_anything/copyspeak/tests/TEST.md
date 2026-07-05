@@ -1,4 +1,4 @@
-# CopySpeak TTS Harness Test Plan
+# CopySpeak Harness Test Plan
 
 ## Test Inventory Plan
 

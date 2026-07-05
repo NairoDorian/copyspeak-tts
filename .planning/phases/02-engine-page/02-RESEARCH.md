@@ -64,36 +64,36 @@ None — discussion stayed within phase scope.
 <phase_requirements>
 ## Phase Requirements
 
-| ID | Description | Research Support |
-|----|-------------|-----------------|
-| ENG-01 | User can select TTS backend (CLI, ElevenLabs, OpenAI, HTTP) | Backend selector dropdown exists in tts-settings.svelte:36-40; Tab state via shadcn-svelte Tabs component |
-| ENG-02 | User can configure backend-specific credentials and command settings | All 4 backend configurations fully implemented in tts-settings.svelte:254-649; extract into components |
-| ENG-04 | User can select voice and speed from the Engine page | Voice selection per backend exists; "speed" is playback speed (Settings), not synthesis speed |
-| SET-01 | TTS engine settings are removed from the Settings page (hard delete) | Settings page imports TtsSettings component at line 4, 315; section wrapper at lines 304-331 |
-| STA-01 | Draft config changes survive tab switching without being lost | `localConfig`/`originalConfig` pattern from Settings page preserves drafts across navigation |
+| ID     | Description                                                          | Research Support                                                                                          |
+| ------ | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| ENG-01 | User can select TTS backend (CLI, ElevenLabs, OpenAI, HTTP)          | Backend selector dropdown exists in tts-settings.svelte:36-40; Tab state via shadcn-svelte Tabs component |
+| ENG-02 | User can configure backend-specific credentials and command settings | All 4 backend configurations fully implemented in tts-settings.svelte:254-649; extract into components    |
+| ENG-04 | User can select voice and speed from the Engine page                 | Voice selection per backend exists; "speed" is playback speed (Settings), not synthesis speed             |
+| SET-01 | TTS engine settings are removed from the Settings page (hard delete) | Settings page imports TtsSettings component at line 4, 315; section wrapper at lines 304-331              |
+| STA-01 | Draft config changes survive tab switching without being lost        | `localConfig`/`originalConfig` pattern from Settings page preserves drafts across navigation              |
 
 </phase_requirements>
 
 ## Standard Stack
 
 ### Core
-| Library | Version | Purpose | Why Standard |
-|---------|---------|---------|--------------|
-| Svelte 5 | runes ($state, $derived, $props) | Reactive state management | Project standard, existing codebase |
-| shadcn-svelte Tabs | context-based | Tab navigation | Already installed, provides accessible tab UI |
-| @tauri-apps/api | invoke() | IPC to Rust backend | Required for config persistence and TTS testing |
-| svelte-sonner | toast() | User notifications | Existing in Settings pattern |
+| Library            | Version                          | Purpose                   | Why Standard                                    |
+| ------------------ | -------------------------------- | ------------------------- | ----------------------------------------------- |
+| Svelte 5           | runes ($state, $derived, $props) | Reactive state management | Project standard, existing codebase             |
+| shadcn-svelte Tabs | context-based                    | Tab navigation            | Already installed, provides accessible tab UI   |
+| @tauri-apps/api    | invoke()                         | IPC to Rust backend       | Required for config persistence and TTS testing |
+| svelte-sonner      | toast()                          | User notifications        | Existing in Settings pattern                    |
 
 ### Supporting
-| Library | Version | Purpose | When to Use |
-|---------|---------|---------|------------|
+| Library    | Version               | Purpose                     | When to Use                                 |
+| ---------- | --------------------- | --------------------------- | ------------------------------------------- |
 | $app/state | page.url.searchParams | URL query param persistence | If Claude chooses URL-based tab persistence |
 
 ### Alternatives Considered
-| Instead of | Could Use | Tradeoff |
-|------------|-----------|----------|
+| Instead of         | Could Use                 | Tradeoff                                                                             |
+| ------------------ | ------------------------- | ------------------------------------------------------------------------------------ |
 | shadcn-svelte Tabs | Custom tab implementation | Custom would require more code, less accessible; shadcn provides context-based state |
-| URL query param | Local state only | URL params survive page reload; local state is simpler but lost on refresh |
+| URL query param    | Local state only          | URL params survive page reload; local state is simpler but lost on refresh           |
 
 **Installation:** No new dependencies required — all libraries already in project.
 
@@ -220,12 +220,12 @@ src/routes/settings/
 
 ## Don't Hand-Roll
 
-| Problem | Don't Build | Use Instead | Why |
-|---------|-------------|-------------|-----|
-| Tab navigation | Custom tab component | shadcn-svelte Tabs | Already installed, accessible, context-based state |
-| Unsaved changes detection | Deep comparison logic | JSON.stringify comparison | Simple, handles nested objects, already proven in Settings |
-| Config persistence | Custom save logic | `invoke("set_config", { newConfig })` + `invoke("get_config")` | Existing IPC pattern, works with Rust Mutex state |
-| Toast notifications | Custom alert system | svelte-sonner `toast.success()` / `toast.error()` | Already integrated in Settings |
+| Problem                   | Don't Build           | Use Instead                                                    | Why                                                        |
+| ------------------------- | --------------------- | -------------------------------------------------------------- | ---------------------------------------------------------- |
+| Tab navigation            | Custom tab component  | shadcn-svelte Tabs                                             | Already installed, accessible, context-based state         |
+| Unsaved changes detection | Deep comparison logic | JSON.stringify comparison                                      | Simple, handles nested objects, already proven in Settings |
+| Config persistence        | Custom save logic     | `invoke("set_config", { newConfig })` + `invoke("get_config")` | Existing IPC pattern, works with Rust Mutex state          |
+| Toast notifications       | Custom alert system   | svelte-sonner `toast.success()` / `toast.error()`              | Already integrated in Settings                             |
 
 **Key insight:** The entire tts-settings.svelte component can be extracted into focused pieces — no new patterns needed, just reorganization.
 
@@ -330,7 +330,7 @@ impl Default for TtsConfig {
 </script>
 
 <svelte:head>
-  <title>Engine - CopySpeak TTS</title>
+  <title>Engine - CopySpeak</title>
 </svelte:head>
 
 <div class="w-full">
@@ -352,11 +352,11 @@ impl Default for TtsConfig {
 
 ## State of the Art
 
-| Old Approach | Current Approach | When Changed | Impact |
-|--------------|------------------|--------------|--------|
-| Monolithic tts-settings.svelte (675 lines) | Split into 5 focused components | Phase 2 | Easier maintenance, clearer separation |
-| Synthesis speed via `{speed}` placeholder | Client-side playback speed only | Phase 2 | Simpler mental model, no engine coupling |
-| TTS config in Settings | Dedicated Engine page | Phase 2 | Single source of truth, cleaner navigation |
+| Old Approach                               | Current Approach                | When Changed | Impact                                     |
+| ------------------------------------------ | ------------------------------- | ------------ | ------------------------------------------ |
+| Monolithic tts-settings.svelte (675 lines) | Split into 5 focused components | Phase 2      | Easier maintenance, clearer separation     |
+| Synthesis speed via `{speed}` placeholder  | Client-side playback speed only | Phase 2      | Simpler mental model, no engine coupling   |
+| TTS config in Settings                     | Dedicated Engine page           | Phase 2      | Single source of truth, cleaner navigation |
 
 **Deprecated/outdated:**
 - `{speed}` placeholder in CLI/HTTP templates: Remove from presets and hints. Playback speed is client-side only.
@@ -377,21 +377,21 @@ impl Default for TtsConfig {
 ## Validation Architecture
 
 ### Test Framework
-| Property | Value |
-|----------|-------|
-| Framework | Vitest |
-| Config file | `vitest.config.ts` |
-| Quick run command | `bun run test` |
-| Full suite command | `bun run test` |
+| Property           | Value              |
+| ------------------ | ------------------ |
+| Framework          | Vitest             |
+| Config file        | `vitest.config.ts` |
+| Quick run command  | `bun run test`     |
+| Full suite command | `bun run test`     |
 
 ### Phase Requirements → Test Map
-| Req ID | Behavior | Test Type | Automated Command | File Exists? |
-|--------|----------|-----------|-------------------|-------------|
-| ENG-01 | User can select TTS backend | unit | `bun run test engine-tabs` | ❌ Wave 0 |
-| ENG-02 | User can configure backend-specific settings | unit | `bun run test local-engine http-engine openai-engine elevenlabs-engine` | ❌ Wave 0 |
-| ENG-04 | User can select voice from Engine page | unit | `bun run test voice-selection` | ❌ Wave 0 |
-| SET-01 | TTS section removed from Settings | integration | Manual verification + grep | ❌ Wave 0 |
-| STA-01 | Draft config survives tab switching | unit | `bun run test draft-persistence` | ❌ Wave 0 |
+| Req ID | Behavior                                     | Test Type   | Automated Command                                                       | File Exists? |
+| ------ | -------------------------------------------- | ----------- | ----------------------------------------------------------------------- | ------------ |
+| ENG-01 | User can select TTS backend                  | unit        | `bun run test engine-tabs`                                              | ❌ Wave 0     |
+| ENG-02 | User can configure backend-specific settings | unit        | `bun run test local-engine http-engine openai-engine elevenlabs-engine` | ❌ Wave 0     |
+| ENG-04 | User can select voice from Engine page       | unit        | `bun run test voice-selection`                                          | ❌ Wave 0     |
+| SET-01 | TTS section removed from Settings            | integration | Manual verification + grep                                              | ❌ Wave 0     |
+| STA-01 | Draft config survives tab switching          | unit        | `bun run test draft-persistence`                                        | ❌ Wave 0     |
 
 ### Sampling Rate
 - **Per task commit:** `bun run test` (quick smoke)

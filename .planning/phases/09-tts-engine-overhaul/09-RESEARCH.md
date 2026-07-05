@@ -43,13 +43,13 @@
 
 <phase_requirements>
 ## Phase Requirements
-| ID | Description | Research Support |
-|----|-------------|-------------------|
-| ENG-09-HTTP-REMOVE | Remove HTTP engine entirely | Existing `TtsEngine` enum, config structs, `http.rs` file to delete |
-| ENG-09-CLI-CONSOLIDATE | Consolidate CLI engines to piper/kokoro/qwen3-tts | Existing `CLI_PRESETS` pattern in local-engine.svelte, same args_template pattern |
-| ENG-09-TWO-STAGE | Two-stage credential + voice verification health checks | ElevenLabs `/v1/voices` endpoint, OpenAI synthesis endpoint for voice validation |
-| ENG-09-OPENAI-VOICE | Add OpenAI complete voice list | OpenAI API docs show 13+ voices (alloy, ash, ballad, coral, echo, fable, onyx, nova, sage, shimmer, verse, marin, cedar) |
-| ENG-06 | Voice list fetched from ElevenLabs API | Existing `list_voices()` implementation in elevenlabs.rs (lines 223-291) |
+| ID                     | Description                                             | Research Support                                                                                                         |
+| ---------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| ENG-09-HTTP-REMOVE     | Remove HTTP engine entirely                             | Existing `TtsEngine` enum, config structs, `http.rs` file to delete                                                      |
+| ENG-09-CLI-CONSOLIDATE | Consolidate CLI engines to piper/kokoro/qwen3-tts       | Existing `CLI_PRESETS` pattern in local-engine.svelte, same args_template pattern                                        |
+| ENG-09-TWO-STAGE       | Two-stage credential + voice verification health checks | ElevenLabs `/v1/voices` endpoint, OpenAI synthesis endpoint for voice validation                                         |
+| ENG-09-OPENAI-VOICE    | Add OpenAI complete voice list                          | OpenAI API docs show 13+ voices (alloy, ash, ballad, coral, echo, fable, onyx, nova, sage, shimmer, verse, marin, cedar) |
+| ENG-06                 | Voice list fetched from ElevenLabs API                  | Existing `list_voices()` implementation in elevenlabs.rs (lines 223-291)                                                 |
 
 </phase_requirements>
 
@@ -57,26 +57,26 @@
 
 ## Standard Stack
 ### Core
-| Library | Version | Purpose | Why Standard |
-|---------|---------|---------|--------------|
-| reqwest | 0.11+ | HTTP client for API calls | Already used in elevenlabs.rs, openai.rs |
-| serde | 1.0+ | JSON serialization | Already used throughout codebase |
-| serde_json | 1.0+ | JSON manipulation | Already used for API request bodies |
-| tauri | 2.x | Desktop app framework | Core to CopySpeak TTS architecture |
-| svelte | 5.x | Frontend framework | Already used in all components |
-| svelte-sonner | ^0.5.44 | Toast notifications | Used for migration notification |
+| Library       | Version | Purpose                   | Why Standard                             |
+| ------------- | ------- | ------------------------- | ---------------------------------------- |
+| reqwest       | 0.11+   | HTTP client for API calls | Already used in elevenlabs.rs, openai.rs |
+| serde         | 1.0+    | JSON serialization        | Already used throughout codebase         |
+| serde_json    | 1.0+    | JSON manipulation         | Already used for API request bodies      |
+| tauri         | 2.x     | Desktop app framework     | Core to CopySpeak architecture           |
+| svelte        | 5.x     | Frontend framework        | Already used in all components           |
+| svelte-sonner | ^0.5.44 | Toast notifications       | Used for migration notification          |
 
 ### Supporting
-| Library | Version | Purpose | When to Use |
-|---------|---------|---------|-------------|
-| tokio | 1.x | Async runtime | Already used for TTS synthesis |
-| thiserror | 2.x | Error handling | Already used in tts/mod.rs |
+| Library   | Version | Purpose        | When to Use                    |
+| --------- | ------- | -------------- | ------------------------------ |
+| tokio     | 1.x     | Async runtime  | Already used for TTS synthesis |
+| thiserror | 2.x     | Error handling | Already used in tts/mod.rs     |
 
 ### Alternatives Considered
-| Instead of | Could Use | Tradeoff |
-|------------|-----------|----------|
-| reqwest (blocking) | ureq + tokio | Simpler for synchronous contexts, but CopySpeak TTS already uses async with spawn_blocking |
-| Custom HTTP client | reqwest | Don't hand-roll — reqwest handles connection pooling, timeouts, retries |
+| Instead of         | Could Use    | Tradeoff                                                                               |
+| ------------------ | ------------ | -------------------------------------------------------------------------------------- |
+| reqwest (blocking) | ureq + tokio | Simpler for synchronous contexts, but CopySpeak already uses async with spawn_blocking |
+| Custom HTTP client | reqwest      | Don't hand-roll — reqwest handles connection pooling, timeouts, retries                |
 
 **Installation:**
 Already installed in Cargo.toml and package.json
@@ -153,11 +153,11 @@ pub struct CredentialCheckResult {
 - **Ignoring voice verification** — Users may have valid API key but invalid voice ID
 
 ## Don't Hand-Roll
-| Problem | Don't Build | Use Instead | Why |
-|---------|-------------|-------------|-----|
-| HTTP client | Custom HTTP implementation | reqwest | Connection pooling, timeouts, retries, error handling |
-| Error types | Custom error enum | TtsError | Already covers all TTS error cases |
-| Config migration | Custom migration script | load_or_default() + toast | Simple, user-friendly notification |
+| Problem          | Don't Build                | Use Instead               | Why                                                   |
+| ---------------- | -------------------------- | ------------------------- | ----------------------------------------------------- |
+| HTTP client      | Custom HTTP implementation | reqwest                   | Connection pooling, timeouts, retries, error handling |
+| Error types      | Custom error enum          | TtsError                  | Already covers all TTS error cases                    |
+| Config migration | Custom migration script    | load_or_default() + toast | Simple, user-friendly notification                    |
 
 ## Common Pitfalls
 ### Pitfall 1: HTTP Engine Migration Edge Case
@@ -290,13 +290,13 @@ const CLI_PRESETS: Record<string, { command: string; args: string[] }> = {
 Note: Exact CLI arguments should be verified with `qwen-tts --help`. The pattern above assumes Python package usage similar to kokoro-tts.
 
 ## State of the Art
-| Old Approach | Current Approach | When Changed | Impact |
-|--------------|------------------|--------------|--------|
-| HTTP engine | Removed entirely | 2026-03-09 | Cleaner codebase, no maintenance burden |
-| 6 CLI presets (chatterbox, coqui-tts, espeak, edge-tts, piper, kokoro) | 3 official presets only (piper, kokoro-tts, qwen3-tts) | 2026-03-09 | Simpler UI, fewer edge cases |
-| Health check (single stage) | Two-stage health check (credential + voice) | 2026-03-09 | More informative, catches invalid voices early |
-| Static OpenAI voices (6 voices) | Full voice list (13+ voices) | 2026-03-09 | More options for users |
-| `list_voices()` API call per section open | `GET /v1/voices` (v2 API) | `GET /v1/voices` (v1 API) | Both work, but v2 is newer with pagination support |
+| Old Approach                                                           | Current Approach                                       | When Changed              | Impact                                             |
+| ---------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------- | -------------------------------------------------- |
+| HTTP engine                                                            | Removed entirely                                       | 2026-03-09                | Cleaner codebase, no maintenance burden            |
+| 6 CLI presets (chatterbox, coqui-tts, espeak, edge-tts, piper, kokoro) | 3 official presets only (piper, kokoro-tts, qwen3-tts) | 2026-03-09                | Simpler UI, fewer edge cases                       |
+| Health check (single stage)                                            | Two-stage health check (credential + voice)            | 2026-03-09                | More informative, catches invalid voices early     |
+| Static OpenAI voices (6 voices)                                        | Full voice list (13+ voices)                           | 2026-03-09                | More options for users                             |
+| `list_voices()` API call per section open                              | `GET /v1/voices` (v2 API)                              | `GET /v1/voices` (v1 API) | Both work, but v2 is newer with pagination support |
 
 ## Open Questions
 1. **qwen3-tts CLI arguments**
