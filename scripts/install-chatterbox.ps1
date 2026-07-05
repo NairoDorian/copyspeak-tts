@@ -40,8 +40,15 @@ Write-Host ""
 
 Require-Uv
 
+# Interactive force prompt: -Force bypasses; a blank Enter keeps the install.
+$effectiveForce = if ($Force) {
+    $true
+} else {
+    Get-Confirmation -Prompt "Reinstall Chatterbox from scratch? (deletes the existing engine dir)" -DefaultYes:$false
+}
+
 $EngineDir = Join-Path (Get-CopySpeakEngineRoot) "chatterbox"
-New-EngineProject -EngineDir $EngineDir -Force:$Force
+New-EngineProject -EngineDir $EngineDir -Force:$effectiveForce
 
 # Install Chatterbox. Upstream is published on PyPI as `chatterbox-tts`.
 Write-Host ""
@@ -85,7 +92,12 @@ $profileJson = @"
   "speed": 1.0,
   "pitch": 1.0,
   "effects": { "enabled": false, "active_effect": "none" },
-  "engine_options": { "preset": "chatterbox" }
+  "engine_options": {
+    "engine": "local",
+    "preset": "chatterbox",
+    "command": "uv",
+    "args_template": ["run", "--project", "{engine_dir}/chatterbox", "python", "{engine_dir}/chatterbox/scripts/copyspeak-chatterbox.py", "--text-file", "{input}", "--voice", "{voice}", "--output", "{output}"]
+  }
 }
 "@
 Write-ProfileSnippet -Json $profileJson
@@ -93,6 +105,6 @@ Write-ProfileSnippet -Json $profileJson
 Write-Host "  Equivalent CopySpeak local CLI config:" -ForegroundColor Cyan
 Write-Host '  command:       uv' -ForegroundColor Gray
 Write-Host '  args_template: ["run","--project","{engine_dir}/chatterbox","python",' -ForegroundColor Gray
-Write-Host '                 "scripts/copyspeak-chatterbox.py","--text-file","{input}",' -ForegroundColor Gray
+Write-Host '                 "{engine_dir}/chatterbox/scripts/copyspeak-chatterbox.py","--text-file","{input}",' -ForegroundColor Gray
 Write-Host '                 "--voice","{voice}","--output","{output}"]' -ForegroundColor Gray
 Write-Host ""

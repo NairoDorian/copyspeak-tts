@@ -26,13 +26,21 @@ impl Default for TtsEngine {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenAIConfig {
+    // Credential — persisted. Profile owns model/voice/format/instructions.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub api_key: String,
+    #[serde(skip_serializing, default = "default_openai_model")]
     pub model: String,
+    #[serde(skip_serializing, default)]
     pub voice: String,
-    #[serde(default = "default_openai_response_format")]
+    #[serde(skip_serializing, default = "default_openai_response_format")]
     pub response_format: String,
-    #[serde(default)]
+    #[serde(skip_serializing, default)]
     pub instructions: Option<String>,
+}
+
+fn default_openai_model() -> String {
+    "tts-1".into()
 }
 
 fn default_openai_response_format() -> String {
@@ -60,29 +68,34 @@ impl OpenAIConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElevenLabsConfig {
+    // Credential — persisted. Profile owns voice/model/format/knobs.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub api_key: String,
+    #[serde(skip_serializing, default)]
     pub voice_id: String,
     /// Cached voice name for display (resolved from API or default voices)
-    #[serde(default)]
+    #[serde(skip_serializing, default)]
     pub voice_name: Option<String>,
+    #[serde(skip_serializing, default)]
     pub model_id: String,
     /// Output format for audio generation
-    #[serde(default)]
+    #[serde(skip_serializing, default)]
     pub output_format: crate::tts::elevenlabs::ElevenLabsOutputFormat,
     /// Voice stability (0.0 - 1.0, default: 0.5)
-    #[serde(default = "default_elevenlabs_stability")]
+    #[serde(skip_serializing, default = "default_elevenlabs_stability")]
     pub voice_stability: f32,
     /// Voice similarity boost (0.0 - 1.0, default: 0.75)
-    #[serde(default = "default_elevenlabs_similarity")]
+    #[serde(skip_serializing, default = "default_elevenlabs_similarity")]
     pub voice_similarity_boost: f32,
     /// Voice style exaggeration (0.0 - 1.0, default: None)
-    #[serde(default)]
+    #[serde(skip_serializing, default)]
     pub voice_style: Option<f32>,
     /// Use speaker boost (default: None)
-    #[serde(default)]
+    #[serde(skip_serializing, default)]
     pub use_speaker_boost: Option<bool>,
     /// Whether to use manual voice ID input instead of the API voice list
-    #[serde(default)]
+    #[serde(skip_serializing, default)]
+    #[allow(dead_code)]
     pub use_manual_voice_id: bool,
 }
 
@@ -120,15 +133,23 @@ impl ElevenLabsConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CartesiaConfig {
+    // Credential — persisted. Profile owns model/voice/format/knobs.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub api_key: String,
+    #[serde(skip_serializing, default)]
     pub model_id: String,
+    #[serde(skip_serializing, default)]
     pub voice_id: String,
+    #[serde(skip_serializing, default)]
     pub voice_name: Option<String>,
+    #[serde(skip_serializing, default)]
     pub output_format: String,
-    #[serde(default)]
+    #[serde(skip_serializing, default)]
     pub encoding: Option<String>,
-    #[serde(default)]
+    #[serde(skip_serializing, default)]
     pub sample_rate: Option<u32>,
+    #[serde(skip_serializing, default)]
+    #[allow(dead_code)]
     pub use_manual_voice_id: bool,
 }
 
@@ -159,9 +180,14 @@ impl CartesiaConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GoogleTtsConfig {
+    // Credential — persisted. Profile owns model/voice/format.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub api_key: String,
+    #[serde(skip_serializing)]
     pub model: String,
+    #[serde(skip_serializing)]
     pub voice_name: String,
+    #[serde(skip_serializing)]
     pub output_format: String,
 }
 
@@ -187,10 +213,16 @@ impl GoogleTtsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MicrosoftTtsConfig {
+    // Credentials — persisted. Profile owns model/voice/format.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub api_key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub endpoint: String,
+    #[serde(skip_serializing)]
     pub model: String,
+    #[serde(skip_serializing)]
     pub voice_name: String,
+    #[serde(skip_serializing)]
     pub output_format: String,
 }
 
@@ -693,14 +725,13 @@ impl Default for VoiceProfile {
     fn default() -> Self {
         let engine = TtsEngine::Edge;
         let voice = "en-US-AvaMultilingualNeural".to_string();
-        let voice_label = Some("Ava, Multilingual".to_string());
         Self {
             id: "default".into(),
-            name: profile_display_name(&engine, voice_label.as_deref(), &voice),
+            name: "Edge-TTS".into(),
             description: None,
             engine,
             voice,
-            voice_label,
+            voice_label: None,
             speed: 1.0,
             pitch: 1.0,
             effects: ProfileEffects::default(),
@@ -729,26 +760,41 @@ pub struct TtsConfig {
     #[serde(default)]
     pub profiles: Vec<VoiceProfile>,
 
-    // Local Config
+    // Legacy fields — kept for deserialization of old configs, skipped on serialize.
+    // Migration (v0→v2) copies what's needed into profiles.
+    #[serde(default, skip_serializing)]
     pub preset: String,
+    #[serde(default, skip_serializing)]
     pub command: String,
+    #[serde(default, skip_serializing)]
     pub args_template: Vec<String>,
+    #[serde(default, skip_serializing)]
     pub voice: String,
 
-    // Cloud Configs
+    // Per-engine global structs persist ONLY their credential fields
+    // (api_key, endpoint); all profile-owned knobs are skip_serializing at
+    // the field level. This keeps secrets on disk (engines page relies on it)
+    // without duplicating profile-owned data into the global config.
+    #[serde(default)]
     pub openai: OpenAIConfig,
+    #[serde(default)]
     pub elevenlabs: ElevenLabsConfig,
+    #[serde(default)]
     pub cartesia: CartesiaConfig,
+    #[serde(default)]
     pub google: GoogleTtsConfig,
+    #[serde(default)]
     pub microsoft: MicrosoftTtsConfig,
+    #[serde(default, skip_serializing)]
     pub edge: EdgeTtsConfig,
+    #[serde(default, skip_serializing)]
     pub http: HttpTtsConfig,
 }
 
 impl Default for TtsConfig {
     fn default() -> Self {
         Self {
-            schema_version: 2,
+            schema_version: 3,
             active_backend: TtsEngine::Edge,
             active_profile_id: "default".into(),
             profiles: vec![VoiceProfile::default()],
@@ -759,7 +805,7 @@ impl Default for TtsConfig {
                 "--project".into(),
                 "{engine_dir}/kitten".into(),
                 "python".into(),
-                "scripts/copyspeak-kitten.py".into(),
+                "{engine_dir}/kitten/scripts/copyspeak-kitten.py".into(),
                 "--text-file".into(),
                 "{input}".into(),
                 "--voice".into(),
@@ -831,30 +877,77 @@ pub fn migrate_tts_config(mut tts: TtsConfig) -> TtsConfig {
         let opts = std::mem::take(&mut profile.engine_options);
         profile.engine_options = opts.normalized_for(&engine);
     }
+    // One-time fix-up: pre-v0.1.8 local profiles stored the engine wrapper as a
+    // CWD-relative path (e.g. `scripts/copyspeak-kitten.py`), which broke once
+    // the Tauri process CWD stopped being the engine install dir. Rewrite any
+    // bare legacy wrapper path to its absolute `{engine_dir}/<engine>/...` form.
+    // Idempotent: only matches args lacking `{engine_dir}` already.
+    for profile in &mut tts.profiles {
+        if let ProfileEngineOptions::Local(local) = &mut profile.engine_options {
+            if let Some(args) = local.args_template.as_mut() {
+                for arg in args.iter_mut() {
+                    if let Some(fixed) = absolutize_wrapper_path(arg) {
+                        *arg = fixed;
+                    }
+                }
+            }
+        }
+    }
     tts.schema_version = 2;
     sync_active_backend_mirror(&mut tts);
 
     tts
 }
 
+/// Rewrite a bare `scripts/copyspeak-<engine>.py` path to its absolute
+/// `{engine_dir}/<engine>/scripts/...` form. Returns `None` for anything else.
+fn absolutize_wrapper_path(arg: &str) -> Option<String> {
+    // ponytail: lookup-driven; add a (wrapper_name, subdir) pair per engine.
+    const WRAPPERS: &[(&str, &str)] = &[
+        ("copyspeak-kitten.py", "kitten"),
+        ("copyspeak-piper.py", "piper"),
+        ("copyspeak-chatterbox.py", "chatterbox"),
+    ];
+    for (name, subdir) in WRAPPERS {
+        if arg == &format!("scripts/{name}") {
+            return Some(format!("{{engine_dir}}/{subdir}/scripts/{name}"));
+        }
+    }
+    None
+}
+
 impl TtsConfig {
     pub fn validate(&self) -> Vec<ValidationError> {
         let mut errors = Vec::new();
 
-        match self
+        let active_profile = self
             .profiles
             .iter()
-            .find(|profile| profile.id == self.active_profile_id)
+            .find(|profile| profile.id == self.active_profile_id);
+        let active_engine = active_profile
             .map(|profile| &profile.engine)
-            .unwrap_or(&self.active_backend)
-        {
+            .unwrap_or(&self.active_backend);
+
+        match active_engine {
             TtsEngine::Local => {
-                if self.command.trim().is_empty() {
+                // Read command/args_template from the active profile's engine_options
+                // (the real source of truth). Fall back to legacy global fields for
+                // configs that haven't been migrated yet — those still hold the
+                // pre-profile values until v2 migration runs.
+                let local_opts = active_profile.and_then(|p| p.engine_options.local());
+                let command = local_opts
+                    .and_then(|o| o.command.clone())
+                    .unwrap_or_else(|| self.command.clone());
+                let args_template = local_opts
+                    .and_then(|o| o.args_template.clone())
+                    .unwrap_or_else(|| self.args_template.clone());
+
+                if command.trim().is_empty() {
                     errors.push(ValidationError::CommandEmpty);
                 }
 
                 // Accept {input}, {text} (legacy), or {raw_text} (inline text) placeholder
-                let has_input_placeholder = self.args_template.iter().any(|arg| {
+                let has_input_placeholder = args_template.iter().any(|arg| {
                     arg.contains("{input}") || arg.contains("{text}") || arg.contains("{raw_text}")
                 });
                 if !has_input_placeholder {
@@ -863,10 +956,8 @@ impl TtsConfig {
                     });
                 }
 
-                let has_output_placeholder = self
-                    .args_template
-                    .iter()
-                    .any(|arg| arg.contains("{output}"));
+                let has_output_placeholder =
+                    args_template.iter().any(|arg| arg.contains("{output}"));
                 if !has_output_placeholder {
                     errors.push(ValidationError::ArgsTemplateMissingPlaceholder {
                         placeholder: "{output}".into(),

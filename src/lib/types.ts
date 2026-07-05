@@ -107,10 +107,10 @@ export interface TtsConfig {
   openai: OpenAIConfig;
   elevenlabs: ElevenLabsConfig;
   cartesia: CartesiaConfig;
-  edge: EdgeTtsConfig;
+  edge?: EdgeTtsConfig;
   google: GoogleTtsConfig;
   microsoft: MicrosoftTtsConfig;
-  http: HttpTtsConfig;
+  http?: HttpTtsConfig;
 }
 
 // ── Edge-TTS ──────────────────────────────────────────────────────────────────
@@ -195,7 +195,6 @@ export interface EngineCatalogEntry {
   description: string;
   docs_url: string;
   supports_voice_refresh: boolean;
-  supports_speed: boolean;
   supports_pitch: boolean;
   supports_bracket_emotes: boolean;
   options: EngineOptionDescriptor[];
@@ -246,8 +245,6 @@ export interface PostProcessingConfig {
 export interface PlaybackConfig {
   on_retrigger: RetriggerMode;
   volume: number;
-  playback_speed: number;
-  pitch: number;
 }
 
 export type HudThemePreset = "dark" | "light" | "custom";
@@ -345,11 +342,6 @@ export interface HotkeyConfig {
 
 export type EffectId = "none" | "walkie_talkie" | "game_boy";
 
-export interface EffectsConfig {
-  enabled: boolean;
-  active_effect: EffectId;
-}
-
 export interface PostProcessConfig {
   enabled: boolean;
   api_key: string;
@@ -368,7 +360,6 @@ export interface AppConfig {
   pagination: PaginationConfig;
   history: HistoryConfig;
   hotkey: HotkeyConfig;
-  effects: EffectsConfig;
   post_process: PostProcessConfig;
 }
 

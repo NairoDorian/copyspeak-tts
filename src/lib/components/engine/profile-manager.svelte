@@ -5,8 +5,18 @@
   import { Slider } from "$lib/components/ui/slider/index.js";
   import { SettingRow } from "$lib/components/ui/setting-row/index.js";
   import { invoke } from "@tauri-apps/api/core";
-  import { Copy, Trash2, Download, Upload, RefreshCw, ExternalLink } from "@lucide/svelte";
+  import {
+    Copy,
+    Trash2,
+    Download,
+    Upload,
+    RefreshCw,
+    ExternalLink,
+    AlertTriangle
+  } from "@lucide/svelte";
   import { toast } from "svelte-sonner";
+  import ProfileExportDialog from "./profile-export-dialog.svelte";
+  import { findSetupEntry } from "./engine-meta";
   import type {
     AppConfig,
     EngineCatalogEntry,
@@ -34,11 +44,13 @@
   const fallbackEngineOptions = ENGINES.map((e) => ({ value: e, label: e }));
   const effectOptions = EFFECTS.map((e) => ({ value: e, label: e }));
 
-  let fileInput: HTMLInputElement | null = $state(null);
   let catalog = $state<EngineCatalogEntry[]>([]);
   let catalogLoading = $state(false);
   let voicesByEngine = $state<Partial<Record<TtsEngine, VoiceCatalogEntry[]>>>({});
   let voicesLoadingFor = $state<TtsEngine | null>(null);
+
+  type DialogMode = "export" | "import" | "delete";
+  let dialogMode = $state<DialogMode | null>(null);
 
   const engineOptions = $derived(
     catalog.length
@@ -50,7 +62,9 @@
   const activeId = $derived(localConfig.tts.active_profile_id);
   const activeIndex = $derived(profiles.findIndex((p: VoiceProfile) => p.id === activeId));
   const active = $derived(activeIndex >= 0 ? profiles[activeIndex] : null);
-  const profileOptions = $derived(profiles.map((p: VoiceProfile) => ({ value: p.id, label: p.name })));
+  const profileOptions = $derived(
+    profiles.map((p: VoiceProfile) => ({ value: p.id, label: p.name }))
+  );
 
   const activeCatalogEntry = $derived(
     active ? catalog.find((entry) => entry.engine === active.engine) : undefined
@@ -59,8 +73,21 @@
     active ? catalogVoicesFor(active.engine as TtsEngine) : []
   );
   const activeVoiceOptions = $derived(
-    activeVoiceCatalog.map((voice: VoiceCatalogEntry) => ({ value: voice.id, label: voice.label }))
+    activeVoiceCatalog.map((voice: VoiceCatalogEntry) => ({
+      value: voice.id,
+      label: voice.label
+    }))
   );
+
+  // Passive hint: the active profile's engine needs a credential that isn't set.
+  // Cheap local check (no IPC) — points the user to /engines rather than blocking.
+  const credentialMissing = $derived(() => {
+    if (!active) return false;
+    const entry = findSetupEntry(active.engine);
+    if (!entry || !entry.credentialTarget) return false;
+    const fields = localConfig.tts as unknown as Record<string, { api_key?: string }>;
+    return !fields[entry.credentialTarget]?.api_key;
+  });
 
   $effect(() => {
     void loadEngineCatalog();
@@ -146,8 +173,6 @@
 
   function selectProfile(id: string) {
     localConfig.tts.active_profile_id = id;
-    // Mirror a named profile's engine to the legacy field so the rest of the app
-    // (engine tabs, HUD) stays coherent while profile-first synthesis rolls out.
     const p = profiles.find((x: VoiceProfile) => x.id === id);
     if (p && p.id !== "default") {
       localConfig.tts.active_backend = p.engine;
@@ -183,65 +208,34 @@
 
   function deleteActive() {
     if (!active || active.id === "default") return;
+    dialogMode = "delete";
+  }
+
+  function confirmDelete() {
+    if (!active) return;
     localConfig.tts.profiles = profiles.filter((p: VoiceProfile) => p.id !== active.id);
     selectProfile(localConfig.tts.profiles[0]?.id ?? "default");
+    dialogMode = null;
     toast.success("Profile deleted");
   }
 
-  function isValidProfile(p: unknown): p is VoiceProfile {
-    if (!p || typeof p !== "object") return false;
-    const o = p as Record<string, unknown>;
-    return (
-      typeof o.id === "string" &&
-      typeof o.name === "string" &&
-      typeof o.engine === "string" &&
-      ENGINES.includes(o.engine as TtsEngine) &&
-      typeof o.voice === "string" &&
-      Number.isFinite(o.speed) &&
-      Number.isFinite(o.pitch) &&
-      typeof o.effects === "object" &&
-      o.effects !== null &&
-      EFFECTS.includes((o.effects as Record<string, unknown>).active_effect as EffectId)
-    );
-  }
-
-  function exportActive() {
+  function openExportDialog() {
     if (!active) return;
-    // Profiles never carry API keys, so this export is safe to share.
-    const json = JSON.stringify({ schema_version: 2, ...active }, null, 2);
-    const blob = new Blob([json], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${active.id}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    dialogMode = "export";
   }
 
-  async function onFileSelected(e: Event) {
-    const input = e.target as HTMLInputElement;
-    const file = input.files?.[0];
-    if (!file) return;
-    try {
-      const parsed = JSON.parse(await file.text());
-      const { schema_version, ...rest } = parsed;
-      if (!isValidProfile(rest)) {
-        toast.error("Invalid profile JSON");
-        return;
-      }
-      const imported = rest as VoiceProfile;
-      // Avoid id collisions.
-      if (profiles.some((p: VoiceProfile) => p.id === imported.id)) {
-        imported.id = makeId();
-      }
-      localConfig.tts.profiles = [...profiles, imported];
-      selectProfile(imported.id);
-      toast.success(`Imported profile "${imported.name}"`);
-    } catch (err) {
-      toast.error(`Import failed: ${err}`);
-    } finally {
-      input.value = "";
+  function openImportDialog() {
+    dialogMode = "import";
+  }
+
+  function handleImportProfile(imported: VoiceProfile) {
+    if (profiles.some((p: VoiceProfile) => p.id === imported.id)) {
+      imported.id = makeId();
     }
+    localConfig.tts.profiles = [...profiles, imported];
+    selectProfile(imported.id);
+    dialogMode = null;
+    toast.success(`Imported "${imported.name}"`);
   }
 </script>
 
@@ -258,10 +252,10 @@
       <Button variant="outline" size="sm" onclick={duplicateActive} title="Duplicate">
         <Copy size={14} />
       </Button>
-      <Button variant="outline" size="sm" onclick={exportActive} title="Export">
+      <Button variant="outline" size="sm" onclick={openExportDialog} title="Export">
         <Download size={14} />
       </Button>
-      <Button variant="outline" size="sm" onclick={() => fileInput?.click()} title="Import">
+      <Button variant="outline" size="sm" onclick={openImportDialog} title="Import">
         <Upload size={14} />
       </Button>
       <Button
@@ -276,14 +270,6 @@
     </div>
   </div>
 
-  <input
-    bind:this={fileInput}
-    type="file"
-    accept="application/json"
-    class="hidden"
-    onchange={onFileSelected}
-  />
-
   <div class="space-y-1 p-4">
     <SettingRow label="Active Profile">
       <Select
@@ -293,80 +279,143 @@
         class="w-56"
       />
     </SettingRow>
+  </div>
 
-    {#if active}
-      <SettingRow label="Name">
-        <Input bind:value={localConfig.tts.profiles[activeIndex].name} class="w-56" />
-      </SettingRow>
+  {#if active}
+    <div class="border-border space-y-4 border-t p-4">
+      <!-- Identity -->
+      <section class="border-border bg-muted/30 rounded-lg border p-3">
+        <p class="text-muted-foreground mb-2 text-xs font-semibold tracking-wide uppercase">
+          Identity
+        </p>
+        <SettingRow label="Name">
+          <Input bind:value={localConfig.tts.profiles[activeIndex].name} class="w-56" />
+        </SettingRow>
+      </section>
 
-      <SettingRow label="Engine">
-        <Select
-          options={engineOptions}
-          value={active.engine}
-          onchange={(e) => onEngineChange((e.target as HTMLSelectElement).value as TtsEngine)}
-          class="w-56"
-        />
-      </SettingRow>
+      <!-- Engine & Voice -->
+      <section class="border-border bg-muted/30 space-y-3 rounded-lg border p-3">
+        <p class="text-muted-foreground text-xs font-semibold tracking-wide uppercase">
+          Engine & Voice
+        </p>
+        <SettingRow label="Engine">
+          <div class="w-56 space-y-1">
+            <Select
+              options={engineOptions}
+              value={active.engine}
+              onchange={(e) => onEngineChange((e.target as HTMLSelectElement).value as TtsEngine)}
+              class="w-56"
+            />
+            {#if credentialMissing()}
+              <a
+                href="/engines"
+                class="inline-flex items-center gap-1 text-xs text-amber-600 hover:underline dark:text-amber-400"
+              >
+                <AlertTriangle size={12} />
+                Set up engine credentials →
+              </a>
+            {/if}
+          </div>
+        </SettingRow>
 
-      <SettingRow label="Manual Voice" tooltip="Voice id / name. Blank uses the provider default.">
-        <Input
-          value={localConfig.tts.profiles[activeIndex].voice}
-          placeholder="provider default"
-          onchange={(e) => setVoice(activeIndex, (e.target as HTMLInputElement).value)}
-          class="w-56"
-        />
-      </SettingRow>
-
-      <SettingRow label="Speed">
-        <div class="flex w-56 items-center gap-2">
-          <span class="text-muted-foreground w-12 shrink-0 text-right text-xs tabular-nums">
-            {active.speed.toFixed(2)}x
-          </span>
-          <Slider
-            value={active.speed}
-            min={0.5}
-            max={2}
-            step={0.05}
-            onchange={(v) => (localConfig.tts.profiles[activeIndex].speed = v)}
-          />
-        </div>
-      </SettingRow>
-
-      <SettingRow label="Pitch">
-        <div class="flex w-56 items-center gap-2">
-          <span class="text-muted-foreground w-12 shrink-0 text-right text-xs tabular-nums">
-            {active.pitch.toFixed(2)}x
-          </span>
-          <Slider
-            value={active.pitch}
-            min={0.5}
-            max={2}
-            step={0.05}
-            onchange={(v) => (localConfig.tts.profiles[activeIndex].pitch = v)}
-          />
-        </div>
-      </SettingRow>
-
-      <SettingRow label="Effect">
-        <Select
-          options={effectOptions}
-          value={active.effects.active_effect}
-          onchange={(e) => {
-            const v = (e.target as HTMLSelectElement).value as EffectId;
-            localConfig.tts.profiles[activeIndex].effects.active_effect = v;
-            localConfig.tts.profiles[activeIndex].effects.enabled = v !== "none";
-          }}
-          class="w-56"
-        />
-      </SettingRow>
-
-      {#if activeCatalogEntry}
-        <div class="border-border mt-3 space-y-3 border-t pt-3">
-          <div class="flex items-start justify-between gap-4">
-            <div>
-              <p class="text-sm font-medium">{activeCatalogEntry.label}</p>
-              <p class="text-muted-foreground text-xs">{activeCatalogEntry.description}</p>
+        {#if activeVoiceOptions.length > 0}
+          <SettingRow label="Voice" tooltip="Known voices from the engine catalog or provider API.">
+            <div class="flex w-56 gap-1.5">
+              <Select
+                options={activeVoiceOptions}
+                value={active.voice}
+                onchange={(e) => setVoice(activeIndex, (e.target as HTMLSelectElement).value)}
+                class="min-w-0 flex-1"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onclick={() => refreshVoices(active.engine)}
+                disabled={voicesLoadingFor === active.engine}
+                title="Refresh voices"
+              >
+                <RefreshCw size={14} />
+              </Button>
             </div>
+          </SettingRow>
+        {:else if activeCatalogEntry?.supports_voice_refresh}
+          <SettingRow label="Voice">
+            <Button
+              variant="outline"
+              size="sm"
+              onclick={() => refreshVoices(active.engine)}
+              disabled={voicesLoadingFor === active.engine}
+            >
+              {voicesLoadingFor === active.engine ? "Loading voices…" : "Load voices"}
+            </Button>
+          </SettingRow>
+        {/if}
+
+        <SettingRow
+          label="Manual Voice"
+          tooltip="Override the catalog voice id. Blank = provider default."
+        >
+          <Input
+            value={localConfig.tts.profiles[activeIndex].voice}
+            placeholder="provider default"
+            onchange={(e) => setVoice(activeIndex, (e.target as HTMLInputElement).value)}
+            class="w-56"
+          />
+        </SettingRow>
+      </section>
+
+      <!-- Sound -->
+      <section class="border-border bg-muted/30 space-y-3 rounded-lg border p-3">
+        <p class="text-muted-foreground text-xs font-semibold tracking-wide uppercase">Sound</p>
+        <SettingRow label="Speed">
+          <div class="flex w-56 items-center gap-2">
+            <span class="text-muted-foreground w-12 shrink-0 text-right text-xs tabular-nums">
+              {active.speed.toFixed(2)}x
+            </span>
+            <Slider
+              value={active.speed}
+              min={0.5}
+              max={2}
+              step={0.05}
+              onchange={(v) => (localConfig.tts.profiles[activeIndex].speed = v)}
+            />
+          </div>
+        </SettingRow>
+        <SettingRow label="Pitch">
+          <div class="flex w-56 items-center gap-2">
+            <span class="text-muted-foreground w-12 shrink-0 text-right text-xs tabular-nums">
+              {active.pitch.toFixed(2)}x
+            </span>
+            <Slider
+              value={active.pitch}
+              min={0.5}
+              max={2}
+              step={0.05}
+              onchange={(v) => (localConfig.tts.profiles[activeIndex].pitch = v)}
+            />
+          </div>
+        </SettingRow>
+        <SettingRow label="Effect">
+          <Select
+            options={effectOptions}
+            value={active.effects.active_effect}
+            onchange={(e) => {
+              const v = (e.target as HTMLSelectElement).value as EffectId;
+              localConfig.tts.profiles[activeIndex].effects.active_effect = v;
+              localConfig.tts.profiles[activeIndex].effects.enabled = v !== "none";
+            }}
+            class="w-56"
+          />
+        </SettingRow>
+      </section>
+
+      <!-- Advanced: engine-specific options + docs -->
+      {#if activeCatalogEntry}
+        <section class="border-border bg-muted/30 space-y-3 rounded-lg border p-3">
+          <div class="flex items-center justify-between gap-2">
+            <p class="text-muted-foreground text-xs font-semibold tracking-wide uppercase">
+              {activeCatalogEntry.label}
+            </p>
             <a
               href={activeCatalogEntry.docs_url}
               target="_blank"
@@ -376,95 +425,82 @@
               Docs <ExternalLink size={12} />
             </a>
           </div>
-        </div>
+
+          {#if activeCatalogEntry.options.length}
+            {#each activeCatalogEntry.options as option (option.key)}
+              <SettingRow label={option.label} tooltip={option.help}>
+                {#if option.kind === "number"}
+                  <Input
+                    type="number"
+                    value={String(optionValue(active, option) ?? "")}
+                    onchange={(e) => {
+                      const raw = (e.target as HTMLInputElement).value;
+                      setOptionValue(activeIndex, option.key, raw === "" ? null : Number(raw));
+                    }}
+                    class="w-56"
+                  />
+                {:else if option.kind === "boolean"}
+                  <Select
+                    options={[
+                      { value: "true", label: "Enabled" },
+                      { value: "false", label: "Disabled" }
+                    ]}
+                    value={String(Boolean(optionValue(active, option)))}
+                    onchange={(e) =>
+                      setOptionValue(
+                        activeIndex,
+                        option.key,
+                        (e.target as HTMLSelectElement).value === "true"
+                      )}
+                    class="w-56"
+                  />
+                {:else if option.kind === "textarea"}
+                  <textarea
+                    value={optionInputValue(active, option)}
+                    onchange={(e) => {
+                      const raw = (e.target as HTMLTextAreaElement).value;
+                      const value =
+                        option.key === "args_template"
+                          ? raw
+                              .split("\n")
+                              .map((line) => line.trim())
+                              .filter(Boolean)
+                          : raw;
+                      setOptionValue(activeIndex, option.key, value);
+                    }}
+                    class="border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:ring-ring min-h-20 w-56 rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
+                  ></textarea>
+                {:else}
+                  <Input
+                    value={optionInputValue(active, option)}
+                    onchange={(e) =>
+                      setOptionValue(activeIndex, option.key, (e.target as HTMLInputElement).value)}
+                    class="w-56"
+                  />
+                {/if}
+              </SettingRow>
+            {/each}
+          {/if}
+        </section>
       {/if}
 
-      {#if activeVoiceOptions.length > 0}
-        <SettingRow label="Catalog Voice" tooltip="Known voices from the engine catalog or provider API.">
-          <div class="flex w-56 gap-1.5">
-            <Select
-              options={activeVoiceOptions}
-              value={active.voice}
-              onchange={(e) => setVoice(activeIndex, (e.target as HTMLSelectElement).value)}
-              class="min-w-0 flex-1"
-            />
-            <Button
-              variant="outline"
-              size="sm"
-              onclick={() => refreshVoices(active.engine)}
-              disabled={voicesLoadingFor === active.engine}
-              title="Refresh voices"
-            >
-              <RefreshCw size={14} />
-            </Button>
-          </div>
-        </SettingRow>
-      {:else if activeCatalogEntry?.supports_voice_refresh}
-        <SettingRow label="Catalog Voice">
-          <Button
-            variant="outline"
-            size="sm"
-            onclick={() => refreshVoices(active.engine)}
-            disabled={voicesLoadingFor === active.engine}
-          >
-            {voicesLoadingFor === active.engine ? "Loading voices…" : "Load voices"}
-          </Button>
-        </SettingRow>
+      {#if active.id === "default"}
+        <p class="text-muted-foreground text-xs">
+          The Default profile is now a real profile. Duplicate it to create a named profile with
+          independent engine, catalog voice, engine settings, speed, pitch and effect.
+        </p>
       {/if}
-
-      {#if activeCatalogEntry?.options.length}
-        <div class="border-border mt-3 border-t pt-3">
-          <p class="mb-2 text-sm font-medium">Engine Settings</p>
-          {#each activeCatalogEntry.options as option (option.key)}
-            <SettingRow label={option.label} tooltip={option.help}>
-              {#if option.kind === "number"}
-                <Input
-                  type="number"
-                  value={String(optionValue(active, option) ?? "")}
-                  onchange={(e) => {
-                    const raw = (e.target as HTMLInputElement).value;
-                    setOptionValue(activeIndex, option.key, raw === "" ? null : Number(raw));
-                  }}
-                  class="w-56"
-                />
-              {:else if option.kind === "boolean"}
-                <Select
-                  options={[{ value: "true", label: "Enabled" }, { value: "false", label: "Disabled" }]}
-                  value={String(Boolean(optionValue(active, option)))}
-                  onchange={(e) =>
-                    setOptionValue(activeIndex, option.key, (e.target as HTMLSelectElement).value === "true")}
-                  class="w-56"
-                />
-              {:else if option.kind === "textarea"}
-                <textarea
-                  value={optionInputValue(active, option)}
-                  onchange={(e) => {
-                    const raw = (e.target as HTMLTextAreaElement).value;
-                    const value = option.key === "args_template"
-                      ? raw.split("\n").map((line) => line.trim()).filter(Boolean)
-                      : raw;
-                    setOptionValue(activeIndex, option.key, value);
-                  }}
-                  class="border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:ring-ring min-h-20 w-56 rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
-                ></textarea>
-              {:else}
-                <Input
-                  value={optionInputValue(active, option)}
-                  onchange={(e) => setOptionValue(activeIndex, option.key, (e.target as HTMLInputElement).value)}
-                  class="w-56"
-                />
-              {/if}
-            </SettingRow>
-          {/each}
-        </div>
-      {/if}
-    {/if}
-
-    {#if active && active.id === "default"}
-      <p class="text-muted-foreground border-border mt-2 border-t pt-3 text-xs">
-        The Default profile is now a real profile. Duplicate it to create a named profile with
-        independent engine, catalog voice, engine settings, speed, pitch and effect.
-      </p>
-    {/if}
-  </div>
+    </div>
+  {/if}
 </div>
+
+<!-- Export / Import / Delete dialogs -->
+{#if dialogMode}
+  <ProfileExportDialog
+    mode={dialogMode}
+    profile={active}
+    onImport={handleImportProfile}
+    onDelete={confirmDelete}
+    onClose={() => (dialogMode = null)}
+  />
+{/if}

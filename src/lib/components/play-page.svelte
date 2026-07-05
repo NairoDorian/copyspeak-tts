@@ -52,17 +52,20 @@
       edge: { voice: "en-US-AvaMultilingualNeural" },
       google: { api_key: "", model: "", voice_name: "", output_format: "" },
       microsoft: { api_key: "", endpoint: "", model: "", voice_name: "", output_format: "" },
-      http: { profile_id: "", url_template: "", method: "POST", headers: [], body_template: null, voice: "", response_format: "wav", timeout_secs: 60 }
+      http: {
+        profile_id: "",
+        url_template: "",
+        method: "POST",
+        headers: [],
+        body_template: null,
+        voice: "",
+        response_format: "wav",
+        timeout_secs: 60
+      }
     },
     playback: {
       on_retrigger: "interrupt",
-      volume: 100,
-      playback_speed: 1.0,
-      pitch: 1.0
-    },
-    effects: {
-      enabled: false,
-      active_effect: "none"
+      volume: 100
     },
     hud: {
       enabled: false,
@@ -157,10 +160,16 @@
   // Sync playback config to store and auto-save (debounced)
   $effect(() => {
     if (config) {
-      const { volume, playback_speed, pitch } = config.playback;
-      const hotkeyEnabled = config.hotkey.enabled;
-      const hotkeyShortcut = config.hotkey.shortcut;
-      const activeEffect = config.effects?.enabled ? config.effects.active_effect : "none";
+      const c = config;
+      const { volume } = c.playback;
+      const hotkeyEnabled = c.hotkey.enabled;
+      const hotkeyShortcut = c.hotkey.shortcut;
+      const activeProfile = c.tts.profiles.find((p) => p.id === c.tts.active_profile_id);
+      const activeEffect = activeProfile?.effects?.enabled
+        ? activeProfile.effects.active_effect
+        : "none";
+      const speed = activeProfile?.speed ?? 1.0;
+      const pitch = activeProfile?.pitch ?? 1.0;
 
       console.log("[PlayPage] Config effect triggered - hotkey:", {
         hotkeyEnabled,
@@ -168,7 +177,7 @@
       });
 
       // Keep playback store in sync so audio plays at correct settings
-      playbackStore.syncPlaybackConfig(volume, playback_speed, pitch, activeEffect);
+      playbackStore.syncPlaybackConfig(volume, speed, pitch, activeEffect);
 
       const timeout = setTimeout(async () => {
         if (isTauri) {
