@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-07-06
+
+### Changed
+
+- **Default config version** bumped to `0.1.10`.
+
+- **Default profiles shipped with new installs** now include four presets:
+  - **Edge** (active, default) — `en-US-AvaMultilingualNeural`, speed 0.9, pitch 1.3.
+  - **ElevenLabs** — George (`JBFqnCBsd6RMkjVDRZzb`), `eleven_turbo_v2_5`, speed 1.1, pitch 0.9.
+  - **Cartesia** — Harper (`c5d00dfb-...`), `sonic-3.5`, speed 0.9, pitch 1.3.
+  - **Gemini** — Orus, `gemini-2.5-flash-preview-tts`, speed 1.1, pitch 0.85.
+
+- **Default profile effects** changed: effects now enabled with `walkie_talkie` as the default effect (was disabled/none).
+
+- **Default HUD position** changed from `bottom-center` to `bottom-left`.
+
 ## [0.1.9] - 2026-07-06
 
 ### Added

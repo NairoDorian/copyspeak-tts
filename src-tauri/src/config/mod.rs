@@ -2,7 +2,7 @@
 // Auto-saved on every change from the frontend via set_config command.
 
 /// Current config schema version. Bumped when making breaking changes to config structure.
-const CONFIG_VERSION: &str = "0.1.5";
+const CONFIG_VERSION: &str = "0.1.10";
 
 mod effects;
 mod general;
@@ -216,7 +216,7 @@ impl Default for AppConfig {
             },
             hud: HudConfig {
                 enabled: true,
-                position: HudPosition::Preset(HudPresetPosition::BottomCenter),
+                position: HudPosition::Preset(HudPresetPosition::BottomLeft),
                 width: 300,
                 height: 100,
                 opacity: 0.85,

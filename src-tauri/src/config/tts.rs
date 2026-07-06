@@ -314,8 +314,8 @@ pub struct ProfileEffects {
 impl Default for ProfileEffects {
     fn default() -> Self {
         Self {
-            enabled: false,
-            active_effect: crate::config::EffectId::None,
+            enabled: true,
+            active_effect: crate::config::EffectId::WalkieTalkie,
         }
     }
 }
@@ -728,13 +728,13 @@ impl Default for VoiceProfile {
         let voice_label = catalog_voice_label(&engine, &voice);
         Self {
             id: "default".into(),
-            name: "Edge-TTS".into(),
+            name: "Edge".into(),
             description: None,
             engine,
             voice,
             voice_label,
-            speed: 1.0,
-            pitch: 1.0,
+            speed: 0.9,
+            pitch: 1.3,
             effects: ProfileEffects::default(),
             text_processing: ProfileTextProcessing::default(),
             engine_options: ProfileEngineOptions::default_for(&TtsEngine::Edge),
@@ -792,13 +792,80 @@ pub struct TtsConfig {
     pub http: HttpTtsConfig,
 }
 
+fn default_elevenlabs_profile() -> VoiceProfile {
+    VoiceProfile {
+        id: "profile-d90537b5".into(),
+        name: "ElevenLabs".into(),
+        description: None,
+        engine: TtsEngine::ElevenLabs,
+        voice: "JBFqnCBsd6RMkjVDRZzb".into(),
+        voice_label: Some("George".into()),
+        speed: 1.1,
+        pitch: 0.9,
+        effects: ProfileEffects::default(),
+        text_processing: ProfileTextProcessing::default(),
+        engine_options: ProfileEngineOptions::ElevenLabs(ElevenLabsEngineOptions {
+            model_id: Some("eleven_turbo_v2_5".into()),
+            output_format: Some("mp3_44100_128".into()),
+            similarity_boost: Some(0.75),
+            stability: Some(0.5),
+            ..Default::default()
+        }),
+    }
+}
+
+fn default_cartesia_profile() -> VoiceProfile {
+    VoiceProfile {
+        id: "profile-8ae75da6".into(),
+        name: "Cartesia".into(),
+        description: None,
+        engine: TtsEngine::Cartesia,
+        voice: "c5d00dfb-501f-43f3-8e79-c810d24f5acd".into(),
+        voice_label: Some("Harper - Conversationalist".into()),
+        speed: 0.9,
+        pitch: 1.3,
+        effects: ProfileEffects::default(),
+        text_processing: ProfileTextProcessing::default(),
+        engine_options: ProfileEngineOptions::Cartesia(CartesiaEngineOptions {
+            model_id: Some("sonic-3.5".into()),
+            output_format: Some("wav".into()),
+            encoding: Some("pcm_f32le".into()),
+            sample_rate: Some(44100),
+        }),
+    }
+}
+
+fn default_google_profile() -> VoiceProfile {
+    VoiceProfile {
+        id: "profile-296ae5c8".into(),
+        name: "Gemini".into(),
+        description: None,
+        engine: TtsEngine::Google,
+        voice: "Orus".into(),
+        voice_label: Some("Orus".into()),
+        speed: 1.1,
+        pitch: 0.85,
+        effects: ProfileEffects::default(),
+        text_processing: ProfileTextProcessing::default(),
+        engine_options: ProfileEngineOptions::Google(GoogleEngineOptions {
+            model: Some("gemini-2.5-flash-preview-tts".into()),
+            output_format: Some("wav".into()),
+        }),
+    }
+}
+
 impl Default for TtsConfig {
     fn default() -> Self {
         Self {
             schema_version: 3,
             active_backend: TtsEngine::Edge,
             active_profile_id: "default".into(),
-            profiles: vec![VoiceProfile::default()],
+            profiles: vec![
+                VoiceProfile::default(),
+                default_elevenlabs_profile(),
+                default_cartesia_profile(),
+                default_google_profile(),
+            ],
             preset: "kitten-tts".into(),
             command: "uv".into(),
             args_template: vec![
