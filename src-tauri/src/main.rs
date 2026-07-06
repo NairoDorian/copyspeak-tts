@@ -491,14 +491,20 @@ fn main() {
             // ponytail: HUD stays visible but parked off-screen; show_* repositions on-screen.
             // Avoids the WebView2 transparent-window hidden→visible repaint bug.
             if let Some(hud_window) = app.get_webview_window("hud") {
-                // DON'T move off-screen here — WebView2 controller init is async and fails
-                // if the window is off-screen when the controller finishes creating.
-                // The window is visually invisible anyway (transparent + opacity:0).
                 let _ = hud_window.set_ignore_cursor_events(true);
-                // Refocus main window (HUD no longer has focus:false so it briefly stole focus)
+                // Refocus main window (HUD briefly steals focus)
                 if let Some(main_window) = app.get_webview_window("main") {
                     let _ = main_window.set_focus();
                 }
+                // ponytail: Park HUD off-screen after a delay so WebView2 controller
+                // finishes init while the window is still on-screen. show_* repositions.
+                let app_h = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    if let Some(w) = app_h.get_webview_window("hud") {
+                        hud::move_hud_offscreen(&w);
+                    }
+                });
             }
 
 
