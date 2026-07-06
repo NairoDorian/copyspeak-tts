@@ -1,8 +1,8 @@
 [package]
 name = "copyspeak"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2021"
-description = "CopySpeak - AI text-to-speech orchestrator for Windows"
+description = "CopySpeak - AI text-to-speech orchestrator"
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
