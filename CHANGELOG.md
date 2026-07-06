@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.10] - 2026-07-06
+## [0.1.10] - 2026-07-07
 
 ### Changed
 
@@ -57,7 +57,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Cartesia (2 static voices) — gender + description; language set to `None` (multilingual).
   - Edge (30 voices) — `language` carries the BCP-47 locale parsed from the voice id (`en-US`, `en-GB`, …) and `gender` is now populated from the live `edge-tts --list-voices` metadata (Microsoft's published genders). The picker groups Edge by **locale** (region is the more useful cluster) with gender shown as per-row meta; cloud engines still group by gender. `en-US-DavisNeural` and `en-US-AmberNeural` are absent from the current live list (likely deprecated) and keep `gender: None`.
   - ElevenLabs — static catalog expanded from 1 (Rachel) to **21 real premade voices**. IDs/names/genders fetched from `GET /v1/voices` (2026-07-06), each with an `"{accent} · {gender} · {style}"` description; `language` set to `None` since gender is the picker group key (avoids a redundant per-row `en`). Rachel was rotated out of the premade set and is dropped — still usable via the manual Voice ID escape hatch.
-
 
 ### Fixed
 
@@ -456,7 +455,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SSML support removed** — SSML markup passthrough feature removed
 - **Streaming TTS mode removed** — Simplified to paginated synthesis only
 
-[Unreleased]: https://github.com/ilyaizen/CopySpeak/compare/v0.1.9...HEAD
+[Unreleased]: https://github.com/ilyaizen/CopySpeak/compare/v0.1.10...HEAD
+[0.1.10]: https://github.com/ilyaizen/CopySpeak/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/ilyaizen/CopySpeak/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/ilyaizen/CopySpeak/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/ilyaizen/CopySpeak/compare/v0.1.6...v0.1.7
