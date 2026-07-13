@@ -14,10 +14,7 @@ pub fn check_groq_credentials(
         log::debug!("[IPC] check_groq_credentials called");
     }
 
-    let api_key = crate::secrets::resolve(
-        &config.lock().unwrap().post_process.api_key,
-        &["POST_PROCESS_API_KEY"],
-    );
+    let api_key = crate::lock_or_recover!(config).post_process.api_key.clone();
 
     if api_key.trim().is_empty() {
         return Ok(CredentialCheckResult {
@@ -27,7 +24,10 @@ pub fn check_groq_credentials(
         });
     }
 
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
     match client
         .get(format!("{}/models", GROQ_BASE_URL))
         .bearer_auth(&api_key)

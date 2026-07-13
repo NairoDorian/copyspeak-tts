@@ -9,6 +9,25 @@ use crate::config::{PostProcessConfig, GROQ_BASE_URL};
 use log::warn;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
+
+static GROQ_CLIENT: OnceLock<Client> = OnceLock::new();
+
+fn groq_client() -> &'static Client {
+    GROQ_CLIENT.get_or_init(|| {
+        Client::builder()
+            .pool_max_idle_per_host(2)
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .tcp_nodelay(true)
+            .tcp_keepalive(std::time::Duration::from_secs(60))
+            // This sits directly on the synthesis hot path — a hung request
+            // must fall back to the original text, not stall TTS forever.
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("Failed to create Groq HTTP client")
+    })
+}
 
 #[derive(Serialize)]
 struct ChatRequest<'a> {
@@ -51,9 +70,7 @@ pub async fn process(text: &str, cfg: &PostProcessConfig) -> Result<String, Stri
 
     let user_content = build_prompt(&cfg.prompt, text);
 
-    let client = Client::builder()
-        .build()
-        .map_err(|e| format!("HTTP client build failed: {e}"))?;
+    let client = groq_client();
 
     let req = ChatRequest {
         model: &cfg.model,
