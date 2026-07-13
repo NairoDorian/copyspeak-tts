@@ -58,7 +58,7 @@ CopySpeak follows a clean architecture pattern:
 - `config/` - Configuration persistence modules
 - `commands/` - Tauri command handlers for frontend communication
 - `clipboard.rs` - Double-copy detection trigger
-- `audio.rs` - Audio playback using rodio
+- `audio/` - Audio playback (player, WAV handling, format conversion)
 - `tts/` - TTS backend abstraction (Kitten, Piper, Kokoro, OpenAI, ElevenLabs)
 - `sanitize/` - Text normalization modules
 
@@ -74,8 +74,8 @@ CopySpeak follows a clean architecture pattern:
 
 ### Before Submitting a Bug Report
 
-1. **Search existing issues** at [github.com/ilyaizen/CopySpeak/issues](https://github.com/ilyaizen/copyspeak-tts/issues)
-2. **Check discussions** at [github.com/ilyaizen/CopySpeak/discussions](https://github.com/ilyaizen/copyspeak-tts/discussions)
+1. **Search existing issues** at [github.com/NairoDorian/copyspeak-tts/issues](https://github.com/NairoDorian/copyspeak-tts/issues)
+2. **Check discussions** at [github.com/NairoDorian/copyspeak-tts/discussions](https://github.com/NairoDorian/copyspeak-tts/discussions)
 3. **Try the latest release** to see if the issue has been fixed
 
 ### Submitting a Bug Report
@@ -272,9 +272,12 @@ Documentation improvements are highly valued! You can contribute by:
 
 ### DO NOT TOUCH Directory
 
-**⚠️ CRITICAL: Do NOT modify or touch files in `src-web/src/lib/locales/DO_NOT_TOUCH/`**
+**⚠️ Translations are managed externally**
 
-This directory contains non-English translations (Arabic, Spanish, Hebrew) that are managed externally. During pre-production, translation keys change frequently as the app evolves.
+The redundant `src-web` SvelteKit project was removed; this app is now a single SvelteKit
+project under `src/`. Only English (`en`) is currently supported — see the locale guard in
+`src/routes/+layout.svelte`. Non-English translation keys are handled outside this repo, so
+do not add or modify locale strings here.
 
 **Why this matters:**
 

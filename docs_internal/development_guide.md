@@ -1,8 +1,8 @@
 # CopySpeak Development Guide
 
-> **Version:** v0.2.0
-> **Last Updated:** 2026-02-24
-> **Note:** Six features deferred to `features-extras` branch (2026-02-24). See roadmap.md for details.
+> **Version:** v0.1.10
+> **Last Updated:** 2026-07-12
+> **Note:** Active development is on `main`. The profile model drives engine selection; see `docs/profile-engine-settings.md`.
 
 ---
 
@@ -177,7 +177,6 @@ copyspeak/
 │   │   ├── clipboard.rs    # Clipboard monitoring
 │   │   ├── autostart.rs    # Windows startup
 │   │   ├── history.rs      # Speech history
-│   │   ├── history_manager.rs # History management
 │   │   ├── pagination.rs    # Text pagination
 │   │   ├── fragment_queue.rs # Fragment queue
 │   │   ├── logging.rs      # Application logging
@@ -193,13 +192,11 @@ copyspeak/
 ├── CLAUDE.md                # AI assistant context file
 └── file-structure.txt       # Complete file structure reference
 
-**Deferred Modules** (available on `features-extras` branch):
-├── src-tauri/src/hud.rs        # HUD window
-├── src-tauri/src/filter.rs     # Content filtering
-├── src-tauri/src/language.rs   # Language detection
-├── src-tauri/src/app_source.rs # Application filter
-├── hud.html                    # HUD window entry
-```
+**Deferred Modules** (not part of the current codebase):
+
+- `filter.rs` — Content sanitization and regex-based filtering (not implemented)
+- `language.rs` — Language detection and voice auto-selection (not implemented)
+- `app_source.rs` — Application filter (not implemented)
 
 > **Note for AI Coding Assistants:** The [`file-structure.txt`](../file-structure.txt) file in the project root contains the complete, up-to-date directory structure of the entire project. This file is automatically maintained and provides a comprehensive reference for understanding the codebase layout.
 
@@ -553,7 +550,7 @@ pub async fn speak_now(
     commands::set_listening,
     commands::get_history,
     commands::clear_history,
-    commands::test_tts,
+    commands::test_tts_engine,
 ])
 ```
 
@@ -706,9 +703,9 @@ impl TtsBackend for MyBackend {
 
 ## Content Filtering
 
-> **⏸️ DEFERRED (v0.3+)** — This feature is preserved on the `features-extras` branch and has been deferred from v0.2 for focus on core functionality.
+> **⏸️ NOT IMPLEMENTED** — Content filtering is not part of the current build. There is no `filter.rs` / regex redaction in the codebase.
 
-### Filter Rules (Deferred)
+### Filter Rules (planned, not implemented)
 
 Filter rules use regex patterns to match and transform text before TTS:
 

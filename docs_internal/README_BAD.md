@@ -4,7 +4,7 @@ This directory mirrors the repo-local `docs_internal/` surface for the CopySpeak
 
 ## Canonical locations
 
-- GitHub repo: `ilyaizen/copyspeak-tts`
+- GitHub repo: `NairoDorian/copyspeak-tts`
 - Canonical checkout on the box: `/srv/apps/copyspeak-tts`
 - Repo-local internal docs: `docs_internal/`
 - Vault mirror: `/root/workspace/HyperVault/projects/copyspeak-tts`

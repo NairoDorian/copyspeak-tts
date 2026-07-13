@@ -51,11 +51,14 @@ DO NOT run checks. ALWAYS ASK USER for explicit confirmation before running any 
 
 DO NOT commit changes without explicit user confirmation. Before ending a task, ask whether to run checks and commit. If the user confirms committing, generate a suitable Conventional Commits message that summarizes the diff concisely.
 
-- `bun format` - biome + prettier hybrid format.
-- `bun check` - types + svelte-check.
-- `bun build` - production build.
+- `bun run format` - Prettier format (`prettier --write .`).
+- `bun run check` - `svelte-kit sync` + `svelte-check` (TypeScript + Svelte).
+- `bun run test` - Vitest suite (runs in the **happy-dom** environment).
+- `bun run build` - production frontend build.
+- `cd src-tauri && cargo test` - Rust test suite.
+- `bun run tauri dev` / `bun run tauri build --bundles nsis` - run/build the full app.
 
-Use running Tauri dev server.
+Use the running Tauri dev server.
 
 ## Efficiency
 
@@ -101,11 +104,10 @@ Use running Tauri dev server.
 
 ## Git Workflow
 
-- **NEVER commit directly to `main`** - all changes via PRs
-- Work on feature branches: `feature/`, `fix/`, `refactor/`, `docs/`
-- Use versioned dev branches for releases: `develop/0.1.0`, `develop/0.2.0`, etc.
-- Open PRs targeting `main` (or `develop/*` for larger efforts)
-- Current development: `develop/0.1.0` (settings consolidation)
+- `main` is the active development branch. Only commit when explicitly asked.
+- Work on feature branches when opening PRs: `feature/`, `fix/`, `refactor/`, `docs/`.
+- Open PRs targeting `main`.
+- This is the `NairoDorian/copyspeak-tts` fork; upstream is `ilyaizen/CopySpeak`. See `FORK_VS_UPSTREAM.md`.
 
 ## Best Practices
 
@@ -171,22 +173,25 @@ src/                     # Svelte 5 frontend
 src-tauri/src/           # Rust backend
 ├── main.rs              # Entry point, IPC registration
 ├── config/              # Persistence modules
-│   └── tts.rs           # TTS config types & engine enum
+│   └── tts.rs           # TTS config types, engine enum, VoiceProfile
 ├── commands/            # IPC handlers
-│   └── tts/             # Synthesis commands
+│   └── tts/             # Synthesis, profiles, voices, health, credentials
 ├── tts/                 # TTS backend implementations
 │   ├── edge.rs          # Edge TTS
 │   ├── openai.rs        # OpenAI
 │   ├── elevenlabs.rs    # ElevenLabs
 │   ├── cartesia.rs      # Cartesia
-│   ├── google.rs        # Google
-│   ├── microsoft.rs     # Microsoft
+│   ├── google.rs        # Google Gemini TTS
+│   ├── microsoft.rs     # Microsoft AI / Azure
 │   ├── http.rs          # Generic HTTP
-│   ├── cli.rs           # Local CLI engines
+│   ├── cli.rs           # Local CLI engines (Kokoro, Kitten, Pocket, Piper)
+│   ├── local_tts_server.rs  # Persistent local HTTP server
+│   ├── piper_server.rs  # Piper persistent server (CUDA GPU mode)
 │   └── catalog.rs       # Engine catalog types
 ├── clipboard.rs         # Double-copy detection
-├── audio.rs             # Playback
-├── post_process.rs      # LLM post-processing
+├── audio/               # Playback (player, format, wav)
+├── post_process/        # LLM post-processing
+├── control_server.rs    # Local HTTP control server (Pi / Claude Code)
 └── sanitize/            # Text normalization
 ```
 
@@ -200,13 +205,20 @@ src-tauri/src/           # Rust backend
 
 ## Documentation
 
-- **docs/ (Public Docs)**: **CONTRIBUTING.md** (contribution guidelines).
+- **docs/ (Public Docs)**: **CONTRIBUTING.md** (contribution guidelines), **engines.md** (engine matrix + installers), **profile-engine-settings.md** (profiles vs. global config boundary), **COPYSPEAK_PI_VOICE*.md** (Pi / Claude Code agent voice integration).
 
-- **docs_internal/ (Internal Docs)**: **project-overview.md** (project context and key decisions), **requirements.md** (feature requirements and traceability), **architecture.md** (system architecture and design), **development_guide.md** (setup and development workflow), **tts_backends.md** (TTS engine integration guide), **brutalist_design.md** (UI design system and aesthetics), **roadmap.md** (development roadmap and phases), **code-patterns-reference.md** (Svelte 5, Rust, and Tauri IPC code examples).
+- **docs_internal/ (Internal Docs)**: **project-overview.md**, **architecture.md**, **requirements.md**, **development_guide.md**, **tts_backends.md**, **roadmap.md**, **implemented_features.md**, **brutalist_design.md**, **hud-overlay.md**, **event-system.md**, **engines-profiles-unification.md**, **code-patterns-reference.md**, **security_hardening_plan.md**, **tts_engines_profiles_installers_plan.md**, **CARTESIA_TTS_PLAN.md**, **build_workflow.md**, **major-rename.md** (implementation plans / history — keep for reference but treat as snapshots of work already completed).
 
 <!-- rtk-instructions v2 -->
 
 ## RTK (Rust Token Killer) - Token-Optimized Commands
+
+### Install RTK
+
+```powershell
+# Installs the latest dev pre-release (dev-<ver>-rc.<n>) tag — one line
+$tag=(git ls-remote --tags https://github.com/rtk-ai/rtk|Select-String 'refs/tags/dev-'|ForEach-Object{($_-split 'refs/tags/')[1].Trim()-replace '\^\{\}$',''}|Sort-Object{if($_-match 'dev-(\d+)\.(\d+)\.(\d+)-rc\.(\d+)'){[version]"$($matches[1]).$($matches[2]).$($matches[3])";[int]$matches[4]}}|Select-Object -Last 1);cargo install --git https://github.com/rtk-ai/rtk --tag $tag --force
+```
 
 ## Golden Rule
 

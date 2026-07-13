@@ -1,8 +1,8 @@
 # CopySpeak Implementation Roadmap
 
-> **Last Updated:** 2026-03-25
-> **Version:** v0.1.0 (HUD completed; TTS Engine overhaul completed)
-> **Status:** Core feature set complete. Phase 9 (TTS Engine Overhaul) delivered. Remaining: onboarding refinement (OBD-02/03), optional enhancements
+> **Last Updated:** 2026-07-12
+> **Version:** v0.1.10 (active development on `main`)
+> **Status:** Core feature set complete and shipped. The profile-based engine model, HUD overlay, global hotkey, and `uv`-managed local engines are all implemented. The historical `features-extras` "deferred" narrative no longer applies.
 
 ---
 
@@ -262,16 +262,16 @@ bottom-left  bottom-center  bottom-right
 
 ---
 
-## Phase 9: Global Hotkey 🚧
+## Phase 9: Global Hotkey ✅
 
-**Status:** Deferred to features-extras branch
+**Status:** Completed — global hotkey via `tauri-plugin-global-shortcut`, configured in `config/hotkey.rs` and the hotkey settings UI.
 
 ### Deliverables
 
-- [ ] Global shortcut plugin initialization
-- [ ] Hotkey registration from config (default: `Ctrl+Shift+S`)
-- [ ] Handler to trigger `speak_now` command
-- [ ] Hotkey parsing and validation
+- [x] Global shortcut plugin initialization
+- [x] Hotkey registration from config
+- [x] Handler to trigger `speak_now` command
+- [x] Hotkey parsing and validation
 
 ---
 
@@ -546,45 +546,14 @@ git checkout features-extras
 
 ---
 
-## Feature Deferral Rationale (2026-02-24)
+## Current Scope Notes
 
-Ten features were deferred from v0.1 to create a focused, stable release:
+The older "Feature Deferral Rationale (2026-02-24)" section listed HUD, global hotkey, and voice presets as *deferred to a `features-extras` branch*. That is no longer accurate — those are implemented and shipped on `main` (HUD overlay, `tauri-plugin-global-shortcut`, and the profile model). The items that remain **not implemented** (backlog) are:
 
-### Deferred Features
+- **Language Detection** — automatic language detection + voice selection
+- **Content Filtering** — regex-based rules to skip sensitive content
+- **Application Filter** — per-app whitelist/blacklist
+- **Batch Processing UI** — sequential multi-text processing UI
+- **Keyboard Shortcuts Help** — help overlay showing hotkeys
 
-1. **Global Hotkey** — System-wide keyboard shortcuts (Phase 9)
-2. **HUD Waveform Visualization** — Canvas-based amplitude visualization
-3. **HUD Drag Positioning** — Drag-to-position mode
-4. **HUD Theme Customization** — Custom colors and styles
-5. **HUD Multi-Monitor** — Multi-monitor support
-6. **Language Detection** — Automatic language detection + voice selection
-7. **Content Filtering** — Regex-based rules to skip sensitive content
-8. **Application Filter** — Per-app whitelist/blacklist
-9. **Keyboard Shortcuts Help** — Help overlay showing hotkeys
-10. **Batch Processing** — Sequential text processing UI
-
-### Why Defer?
-
-- ✅ **Reduces v0.1 scope** — Focuses on stable core functionality
-- ✅ **Fewer dependencies** — Removed 4 unused crates (whatlang, tauri-plugin-global-shortcut, regex, lazy_static)
-- ✅ **Cleaner architecture** — Easier to test, debug, and maintain
-- ✅ **Faster development** — No need to delay v0.1 for non-critical features
-- ✅ **Preserved work** — All code is complete and on `features-extras`
-
-### Impact on v0.1
-
-- Core clipboard → speech flow works perfectly
-- Audio playback, settings, history all functional
-- Clean, maintainable codebase
-- Faster iteration and bug fixes
-
-### Path to v0.2+
-
-When ready, the `features-extras` branch can be:
-
-1. Cherry-picked feature-by-feature
-2. Merged wholesale with conflict resolution
-3. Re-implemented with fresh architecture
-4. Made conditional with feature flags
-
-All options are available with the deferred code preserved.
+These are intentionally out of the current core scope; nothing is pending on a separate branch.

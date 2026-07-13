@@ -1,7 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { execFileSync, spawn } from "node:child_process";
 import { request } from "node:http";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 type Engine = "cartesia" | "openai" | "elevenlabs" | "local";
@@ -167,21 +168,57 @@ function shouldSkipDuplicate(text: string) {
   return false;
 }
 
-async function postSpeak(text: string): Promise<unknown> {
+let _cachedToken: string | undefined;
+function loadToken(): string | undefined {
+  if (_cachedToken !== undefined) return _cachedToken || undefined;
+  // Honor COPYSPEAK_CONTROL_TOKEN env override
+  if (process.env.COPYSPEAK_CONTROL_TOKEN) {
+    _cachedToken = process.env.COPYSPEAK_CONTROL_TOKEN;
+    return _cachedToken;
+  }
+  const configPath = findConfigPath();
+  if (configPath && existsSync(configPath)) {
+    try {
+      const raw = readFileSync(configPath, "utf8");
+      const cfg = JSON.parse(raw);
+      _cachedToken = cfg?.general?.control_token || "";
+      return _cachedToken || undefined;
+    } catch {
+      _cachedToken = "";
+    }
+  }
+  _cachedToken = "";
+  return undefined;
+}
+
+function findConfigPath(): string | null {
+  if (process.platform === "win32") {
+    const appdata = process.env.APPDATA;
+    if (appdata) return join(appdata, "CopySpeak TTS", "config.json");
+  }
+  const xdg = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+  return join(xdg, "CopySpeak TTS", "config.json");
+}
+
+async function postSpeak(text: string) {
   const body = JSON.stringify({ text, engine: state.engine, effect: state.effect });
   const url = new URL(process.env.COPYSPEAK_CONTROL_URL || "http://127.0.0.1:43117/speak");
 
-  return await new Promise<unknown>((resolve, reject) => {
+  const headers: Record<string, string | number> = {
+    "content-type": "application/json",
+    "content-length": Buffer.byteLength(body)
+  };
+  const token = loadToken();
+  if (token) headers["authorization"] = `Bearer ${token}`;
+
+  await new Promise<void>((resolve, reject) => {
     const req = request(
       {
         method: "POST",
         hostname: url.hostname,
         port: url.port,
         path: url.pathname,
-        headers: {
-          "content-type": "application/json",
-          "content-length": Buffer.byteLength(body)
-        }
+        headers
       },
       (res) => {
         let responseBody = "";

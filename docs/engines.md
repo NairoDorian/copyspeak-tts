@@ -13,12 +13,12 @@ pitch + effect as one swappable unit.
 
 | Engine             | Type   | API key        | Offline | Installer                | Setup test               |
 | ------------------ | ------ | -------------- | ------- | ------------------------ | ------------------------ |
-| Edge-TTS           | cloud  | no             | no      | `install-edge-tts.ps1`   | `test_tts_engine_config` |
-| Cartesia (Sonic)   | cloud  | yes            | no      | —                        | `test_tts_engine_config` |
-| ElevenLabs         | cloud  | yes            | no      | —                        | `test_tts_engine_config` |
-| OpenAI             | cloud  | yes            | no      | —                        | `test_tts_engine_config` |
-| Google Gemini TTS  | cloud  | yes            | no      | —                        | `test_tts_engine_config` |
-| Microsoft / Azure  | cloud  | yes + endpoint | no      | —                        | `test_tts_engine_config` |
+| Edge-TTS           | cloud  | no             | no      | `install-edge-tts.ps1`   | `test_tts_engine` |
+| Cartesia (Sonic)   | cloud  | yes            | no      | —                        | `test_tts_engine` |
+| ElevenLabs         | cloud  | yes            | no      | —                        | `test_tts_engine` |
+| OpenAI             | cloud  | yes            | no      | —                        | `test_tts_engine` |
+| Google Gemini TTS  | cloud  | yes            | no      | —                        | `test_tts_engine` |
+| Microsoft / Azure  | cloud  | yes + endpoint | no      | —                        | `test_tts_engine` |
 | Kitten TTS         | local  | no             | yes     | `install-kittentts.ps1`  | installer smoke test     |
 | Piper (piper1-gpl) | local  | no             | yes     | `install-piper.ps1`      | installer smoke test     |
 | Kokoro TTS         | local  | no             | yes     | `install-kokoro.ps1`     | installer smoke test     |

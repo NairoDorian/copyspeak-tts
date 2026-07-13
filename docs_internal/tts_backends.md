@@ -1,114 +1,64 @@
 # TTS Backend Integration Guide
 
-> **Last Updated:** 2026-02-26
-> **Purpose:** Reference for supported TTS engines and adding new backends
+> **Last Updated:** 2026-07-12 (aligned with v0.1.10)
+> **Purpose:** Reference for supported TTS engines, installers, and the profile model
 
 ---
 
 ## Table of Contents
 
 - [TTS Backend Integration Guide](#tts-backend-integration-guide)
-  - [Table of Contents](#table-of-contents)
   - [Overview](#overview)
+  - [Engine Model (Profiles)](#engine-model-profiles)
   - [Supported Backend Types](#supported-backend-types)
-    - [1. CLI Backend (Default)](#1-cli-backend-default)
-    - [2. HTTP Server Backend](#2-http-server-backend)
-  - [Preset Configurations](#preset-configurations)
-    - [Piper (Default Preset)](#piper-default-preset)
-    - [kokoro-tts](#kokoro-tts)
+    - [Local CLI / Persistent HTTP Server](#local-cli--persistent-http-server)
+    - [Cloud (native Rust HTTP)](#cloud-native-rust-http)
+    - [Generic HTTP Server](#generic-http-server)
+  - [Local Engine Installers](#local-engine-installers)
+    - [Kitten TTS](#kitten-tts)
+    - [Piper](#piper)
+    - [Kokoro TTS](#kokoro-tts)
+    - [Pocket TTS](#pocket-tts)
     - [Chatterbox](#chatterbox)
-    - [Coqui TTS / XTTS-v2](#coqui-tts--xtts-v2)
-    - [eSpeak-ng](#espeak-ng)
-    - [Edge TTS (Microsoft)](#edge-tts-microsoft)
-    - [ElevenLabs (Cloud)](#elevenlabs-cloud)
+    - [Edge TTS](#edge-tts)
+  - [Cloud Engines](#cloud-engines)
+    - [OpenAI](#openai)
+    - [ElevenLabs](#elevenlabs)
+    - [Cartesia](#cartesia)
+    - [Google Gemini TTS](#google-gemini-tts)
+    - [Microsoft / Azure](#microsoft--azure)
   - [Backend Trait Interface](#backend-trait-interface)
-    - [Error Types](#error-types)
   - [Adding a New Backend](#adding-a-new-backend)
-    - [Step 1: Create Backend Module](#step-1-create-backend-module)
-    - [Step 2: Register in mod.rs](#step-2-register-in-modrs)
-    - [Step 3: Add Preset Configuration](#step-3-add-preset-configuration)
-    - [Step 4: Document in This File](#step-4-document-in-this-file)
   - [Troubleshooting](#troubleshooting)
-    - [Common Issues](#common-issues)
-    - [Testing a Backend](#testing-a-backend)
-    - [Health Check](#health-check)
   - [Performance Comparison](#performance-comparison)
-  - [Local HTTP Server Backend](#local-http-server-backend)
-    - [Kokoro Local Server](#kokoro-local-server)
-    - [Fish Speech 1.5](#fish-speech-15)
-    - [Coqui TTS Server](#coqui-tts-server)
-    - [Chatterbox Server](#chatterbox-server)
-    - [Generic OpenAI-Compatible TTS](#generic-openai-compatible-tts)
 
 ---
 
 ## Overview
 
-CopySpeak is designed as a TTS **orchestrator** - it doesn't bundle its own TTS engine. Instead, users install their preferred TTS engine, and CopySpeak communicates with it via a configurable interface.
+CopySpeak is designed as a TTS **orchestrator** — it doesn't bundle its own TTS engine. Instead, users install their preferred TTS engine (local, via `uv`, or a cloud API), and CopySpeak drives it through a **profile model**: a `VoiceProfile` (engine + voice + speed + pitch + effects + per-engine knobs) selects the backend at synthesis time. The Engine page owns only credentials, setup tests, and local-engine installers. See [`docs/profile-engine-settings.md`](../docs/profile-engine-settings.md) for the boundary.
+
+> **Note:** The generic HTTP backend is first-class (`TtsEngine::Http`, configured per profile). It was not removed — it backs OpenAI-compatible and custom servers.
+
+---
+
+## Engine Model (Profiles)
+
+Synthesis resolves an **effective request** (`engine`, `voice`, `speed`, `pitch`, `effects`, `engine_options`) from the active `VoiceProfile` (`src-tauri/src/config/tts.rs`). `TtsEngine` variants: `Local`, `Http`, `OpenAI`, `ElevenLabs`, `Cartesia`, `Google`, `Microsoft`, `Edge`. The default profile ships as **Edge** (`en-US-AvaMultilingualNeural`).
+
+Local engines run two ways:
+- **One-shot CLI** path (`tts/cli.rs`) for a single synthesis.
+- **Persistent HTTP server** (`tts/local_tts_server.rs`, `tts/piper_server.rs`) that mirrors the CLI launch but keeps the model resident in RAM between utterances.
 
 ---
 
 ## Supported Backend Types
 
-### 1. CLI Backend (Default)
+### Local CLI / Persistent HTTP Server
 
-The CLI backend spawns an external process to synthesize speech.
+Local engines are installed via `uv` into `%LOCALAPPDATA%\CopySpeak\engines\<engine>`. The CLI path spawns the engine per request; the persistent server keeps it warm for sub-second synthesis.
 
-### 2. HTTP Server Backend
-
-The HTTP backend sends requests to a local (or remote) HTTP TTS server.
-
-**How it works:**
-
-1. CopySpeak builds a request from configurable URL and body templates
-2. Sends an HTTP request to the TTS server
-3. Reads the audio bytes from the response
-4. Plays the audio
-
-**Configuration:**
-
-```json
-{
-  "tts": { "active_backend": "http" },
-  "http_tts": {
-    "url_template": "http://localhost:8880/v1/audio/speech",
-    "headers": [["Content-Type", "application/json"]],
-    "body_template": "{\"model\":\"kokoro\",\"input\":\"{text}\",\"voice\":\"{voice}\",\"response_format\":\"wav\"}",
-    "response_format": "wav",
-    "timeout_secs": 30
-  }
-}
-```
-
-**Placeholder Tokens:**
-
-| Token     | Description               |
-| --------- | ------------------------- |
-| `{text}`  | The text to synthesize    |
-| `{voice}` | Selected voice identifier |
-| `{speed}` | Playback speed multiplier |
-
-**How it works:**
-
-1. CopySpeak writes text to a temp file or passes as argument
-2. Calls the TTS command with templated arguments
-3. Reads the output WAV file
-4. Plays audio and cleans up temp files
-
-**Configuration:**
-
-```json
-{
-  "tts": {
-    "preset": "custom",
-    "command": "my-tts-engine",
-    "args_template": "--text \"{text}\" --output \"{output}\" --voice \"{voice}\"",
-    "voice": "en-us"
-  }
-}
-```
-
-**Placeholder Tokens:**
+**Placeholder Tokens** (see `tts/cli.rs` `CliTtsBackend::build_args`):
 
 | Token        | Description                         |
 | ------------ | ----------------------------------- |
@@ -117,8 +67,15 @@ The HTTP backend sends requests to a local (or remote) HTTP TTS server.
 | `{voice}`    | Selected voice identifier           |
 | `{data_dir}` | CopySpeak config directory          |
 | `{raw_text}` | Actual text content (not file path) |
+| `{engine_dir}` | `%LOCALAPPDATA%\CopySpeak\engines` (uv project root) |
 
----
+### Cloud (native Rust HTTP)
+
+Cloud engines (OpenAI, ElevenLabs, Cartesia, Google, Microsoft, Edge) are native Rust HTTP backends in `src-tauri/src/tts/`. Credentials live in global config; voices/models/knobs live in the profile.
+
+### Generic HTTP Server
+
+Any TTS engine exposing an HTTP API (OpenAI-compatible or custom) is configured **per profile** (`TtsEngine::Http`): URL template, method, headers, body template, voice, response format, timeout. Placeholder tokens: `{text}`, `{raw_text}`, `{voice}`, `{speed}`.
 
 ## Preset Configurations
 
@@ -195,53 +152,49 @@ Default model is `nano` (fastest, smallest). Change via `--model` flag in CLI.
 
 - Models are downloaded automatically on first use from Hugging Face Hub
 - First synthesis will be slower as the model downloads (~25-80MB depending on variant)
-- Subsequent syntheses are fast as the model is cached locally
+- CopySpeak uses `kitten_server.py` to keep the model loaded in RAM via a persistent HTTP server — subsequent syntheses are ~0.3s
 - Playback speed is controlled via browser frontend playback rate (not at TTS generation level)
 
 ---
 
 ### Piper
 
-[Piper](https://github.com/OHF-Voice/piper1-gpl) (piper1-gpl) is a fast, offline neural TTS engine with many EN US voices.
+[Piper](https://github.com/OHF-Voice/piper1-gpl) (piper1-gpl) is a fast, local offline neural TTS engine. CopySpeak keeps the model loaded in RAM via a persistent HTTP server (`tts/piper_server.rs`), eliminating reload latency. The Piper tab also supports a **CUDA GPU** mode (toggle in settings) for faster synthesis.
 
-**Installation:**
+#### 1. Install (uv-based)
 
-```bash
-pip install piper
+Run the project installer; it bootstraps `uv`, creates a uv project under `%LOCALAPPDATA%\CopySpeak\engines\piper`, and installs `piper-tts[http]`:
+
+```powershell
+./scripts/install-piper.ps1        # CPU
+./scripts/install-piper.ps1 -Cuda  # GPU/CUDA (installs onnxruntime-gpu + NVIDIA deps)
 ```
 
-**Model download** — place `.onnx` + `.onnx.json` files in `%APPDATA%\CopySpeak\`:
+Voices download into `%LOCALAPPDATA%\CopySpeak\engines\piper\voices\` (e.g. `en_US-joe-medium`). CopySpeak scans this directory on startup and populates the voice menu with all quality variations (low, medium, high).
 
 ```bash
-# Example: download joe-medium
-python3 -m piper.download_voices en_US-joe-medium
-# Then move the files into %APPDATA%\CopySpeak\
+# Manual voice download via the installed tool
+uv run --project $env:LOCALAPPDATA\CopySpeak\engines\piper python -m piper.download_voices en_US-joe-medium
 ```
 
-**Preset Configuration** (auto-applied when "Piper TTS" preset is selected):
+#### 2. Preset Configuration (applied automatically when "Piper" profile is selected):
 
 ```json
 {
   "tts": {
-    "preset": "piper",
-    "command": "python3",
-    "args_template": [
-      "-m",
-      "piper",
-      "--data-dir",
-      "{data_dir}",
-      "-m",
-      "{voice}",
-      "-f",
-      "{output}",
-      "--input-file",
-      "{input}"
-    ],
-    "voice": "en_US-joe-medium",
-    "speed": 1.0
+    "profiles": [{
+      "engine": "local",
+      "engine_options": { "preset": "piper", "cuda": false },
+      "voice": "en_US-joe-medium"
+    }]
   }
 }
 ```
+
+Notes:
+- `{data_dir}` / `{engine_dir}` placeholders resolve to the uv project root; the CLI/one-shot path and the persistent server share the same launch args built in `tts/cli.rs` / `tts/piper_server.rs`.
+- `--cuda` is auto-injected into the launch args when CUDA mode is enabled.
+- Playback speed and pitch are controlled via frontend playback rate (not at TTS generation level).
 
 **Placeholder tokens:**
 
@@ -265,149 +218,142 @@ python3 -m piper.download_voices en_US-joe-medium
 
 ### kokoro-tts
 
-[Kokoro TTS](https://github.com/hexgrad/kokoro) is a fast, high-quality local TTS engine.
+[Kokoro TTS](https://github.com/hexgrad/kokoro) is a fast, high-quality local TTS engine (~500MB ONNX model).
+
+**Features:**
+
+- **11 built-in voices** across American and British English
+- **24 kHz output** — high-quality audio
+- **Direct Python API** — CopySpeak uses `kokoro_tts.Kokoro` API via `kokoro_server.py` to keep the model loaded in RAM
 
 **Installation:**
 
 ```bash
-# Install via pip
 pip install kokoro-tts
-
-# Or download standalone binary
 ```
+
+**Model files:** Download `kokoro-v1.0.onnx` and `voices-v1.0.bin` from [GitHub Releases](https://github.com/nazdridoy/kokoro-tts/releases). Place them in a `kokoro/` directory at the project root, or CopySpeak will auto-discover them in common installation paths.
 
 **Preset Configuration:**
 
 ```json
 {
   "tts": {
-    "preset": "kokoro",
+    "preset": "kokoro-tts",
     "command": "kokoro-tts",
-    "args_template": "--text \"{text}\" --output \"{output}\" --voice \"{voice}\"",
-    "voice": "af_nicole"
+    "args_template": ["{input}", "{output}", "--voice", "{voice}"],
+    "voice": "af_heart"
   }
 }
 ```
 
 **Available Voices:**
 
-- `af_nicole` - American Female
-- `af_sky` - American Female (younger)
-- `am_adam` - American Male
-- `am_michael` - American Male (older)
-- `bf_emma` - British Female
-- `bm_george` - British Male
+- `af_heart`, `af_bella`, `af_nicole`, `af_sarah`, `af_sky` — American Female
+- `am_adam`, `am_michael` — American Male
+- `bf_emma`, `bf_isabella` — British Female
+- `bm_george`, `bm_lewis` — British Male
+
+**Notes:**
+
+- CopySpeak uses `kokoro_server.py` to keep the ~500MB ONNX model loaded in RAM via a persistent HTTP server — synthesis is ~1.1s vs 7–9s cold start
+- The server falls back to CLI subprocess if the `kokoro_tts` Python package isn't importable
+- Model files are auto-discovered in `kokoro/` directory (project root), pip install paths, and system directories
 
 ---
+
+---
+
+### Pocket TTS
+
+[Pocket TTS](https://github.com/kyutai-labs/pocket-tts) by Kyutai Labs is a lightweight CPU-optimized TTS engine (100M parameters) with voice cloning support.
+
+**Features:**
+
+- **Runs on CPU** — no GPU required, uses ~2 CPU cores
+- **8+ built-in voices** — alba, marius, javert, jean, fantine, cosette, eponine, azelma
+- **24 kHz output** — high-quality audio at standard sample rate
+- **~6× real-time** — faster than real-time on modern CPUs
+- **Voice cloning** — supports custom voice prompts from WAV files
+- **Multi-language** — English, French, German, Portuguese, Italian, Spanish
+
+**Installation:**
+
+```powershell
+./scripts/install-pocket.ps1      # uv-based installer (recommended)
+```
+
+Or manually:
+
+```bash
+pip install pocket-tts
+```
+
+**Preset Configuration:**
+
+```json
+{
+  "tts": {
+    "preset": "pocket-tts",
+    "command": "uv",
+    "args_template": [
+      "run", "--project", "{engine_dir}/pocket", "python",
+      "{engine_dir}/pocket/pocket_server.py", "--voice", "{voice}",
+      "--text", "{raw_text}", "--output-path", "{output}"
+    ],
+    "voice": "alba"
+  }
+}
+```
+
+**Available Voices:**
+
+- `alba` (default) — Natural English female
+- `marius`, `javert`, `jean` — English male voices
+- `fantine`, `cosette`, `eponine`, `azelma` — English female voices
+
+**Notes:**
+
+- CopySpeak uses `pocket_server.py` to keep the model loaded in RAM via `pocket_tts.TTSModel` API — synthesis is ~0.3–0.7s vs 5–16s cold start
+- Also supports `pocket-tts serve` built-in FastAPI server for web interface
 
 ---
 
 ### Chatterbox
 
-[Chatterbox](https://github.com/resemble-ai/chatterbox) is an open-source, zero-shot TTS with emotion control.
-
-**Installation:**
-
-```bash
-pip install chatterbox-tts
-```
-
-**Preset Configuration:**
-
-```json
-{
-  "tts": {
-    "preset": "chatterbox",
-    "command": "chatterbox-tts",
-    "args_template": ["--text", "{input}", "--output", "{output}", "--voice", "{voice}"],
-    "voice": "default"
-  }
-}
-```
-
----
-
-### Coqui TTS / XTTS-v2
-
-[Coqui TTS](https://github.com/coqui-ai/TTS) provides state-of-the-art neural TTS including the XTTS-v2 multilingual model.
-
-**Installation:**
-
-```bash
-pip install TTS
-```
-
-**Preset Configuration:**
-
-```json
-{
-  "tts": {
-    "preset": "coqui-tts",
-    "command": "tts",
-    "args_template": ["--text", "{input}", "--out_path", "{output}", "--model_name", "{voice}"],
-    "voice": "tts_models/en/ljspeech/tacotron2-DDC"
-  }
-}
-```
-
-**Note:** Replace `{voice}` with the Coqui model name. For XTTS-v2, use `tts_models/multilingual/multi-dataset/xtts_v2`.
-
----
-
-### eSpeak-ng
-
-[eSpeak-ng](https://github.com/espeak-ng/espeak-ng) is a compact, open-source speech synthesizer.
-
-**Installation:**
-
-```bash
-# Windows: Download from releases
-# Add to PATH
-```
-
-**Configuration:**
-
-```json
-{
-  "tts": {
-    "preset": "espeak",
-    "command": "espeak-ng",
-    "args_template": "-w \"{output}\" -v {voice} \"{text}\"",
-    "voice": "en-us"
-  }
-}
-```
+[Chatterbox](https://github.com/resemble-ai/chatterbox) is an open-source, zero-shot TTS with emotion control. Installed via `uv` (`install-chatterbox.ps1`) into `%LOCALAPPDATA%\CopySpeak\engines\chatterbox`; it runs as a local `http` profile (OpenAI-compatible server). See [`docs/engines.md`](../docs/engines.md) for the current installer/setup flow.
 
 ---
 
 ### Edge TTS (Microsoft)
 
-[Edge TTS](https://github.com/rany2/edge-tts) uses Microsoft's online TTS service.
+[Edge TTS](https://github.com/rany2/edge-tts) uses Microsoft's online TTS service. In CopySpeak it is a **native Rust backend** (`tts/edge.rs`, `TtsEngine::Edge`) — no API key required, no local CLI. Voices are enumerated from a static catalog (`catalog.rs`) and refreshed live via the Edge API.
 
-**Installation:**
+**Configuration:** select the `Edge-TTS` engine tab on the Engine page (no credentials). Pick a voice in the profile.
 
-```bash
-pip install edge-tts
-```
+---
+
+## Cloud Engines
+
+### OpenAI
+
+[OpenAI TTS](https://platform.openai.com/docs/guides/text-to-speech) is a cloud API with ~6 built-in voices and good quality. It is a **native Rust backend** (`tts/openai.rs`, `TtsEngine::OpenAI`); credentials live in global config and voice/model in the profile.
 
 **Configuration:**
 
 ```json
 {
   "tts": {
-    "preset": "edge-tts",
-    "command": "edge-tts",
-    "args_template": "--text \"{text}\" --write-media \"{output}\" --voice {voice}",
-    "voice": "en-US-AriaNeural"
+    "active_backend": "openai",
+    "openai": { "api_key": "sk-...", "model": "tts-1", "voice": "alloy" }
   }
 }
 ```
 
-**Note:** Requires internet connection. Edge TTS outputs MP3 by default - use `--write-media` for WAV.
+**Notes:**
+- Playback speed and pitch are controlled via frontend playback rate (not at generation level).
 
----
-
-### ElevenLabs (Cloud)
+### ElevenLabs
 
 [ElevenLabs](https://elevenlabs.io) provides state-of-the-art AI speech synthesis with natural-sounding voices.
 
@@ -493,21 +439,18 @@ pip install edge-tts
 
 ## Backend Trait Interface
 
-All backends implement the `TtsBackend` trait:
+All backends implement the `TtsBackend` trait (`src-tauri/src/tts/mod.rs`):
 
 ```rust
-#[async_trait]
 pub trait TtsBackend: Send + Sync {
-    /// Synthesize text to WAV audio bytes
-    async fn synthesize(
-        &self,
-        text: &str,
-        voice: &str,
-        _speed: f32,
-    ) -> Result<Vec<u8>, TtsError>;
+    /// Stable identifier for the backend.
+    fn name(&self) -> &str;
 
-    /// Check if the backend is available and properly configured
-    async fn health_check(&self) -> Result<bool, TtsError>;
+    /// Synthesize text to WAV audio bytes.
+    fn synthesize(&self, text: &str, voice: &str, speed: f32) -> Result<Vec<u8>, TtsError>;
+
+    /// Check if the backend is available and properly configured.
+    fn health_check(&self) -> Result<(), TtsError>;
 }
 ```
 
@@ -645,138 +588,6 @@ CopySpeak runs a health check on startup. If it fails:
 
 ---
 
-## Local HTTP Server Backend
+## Adding a New Backend
 
-CopySpeak supports any TTS engine that exposes an HTTP API. Select **"Local HTTP Server"** as the active backend and choose a preset or configure manually.
-
----
-
-### Kokoro Local Server
-
-[Kokoro FastAPI](https://github.com/remsky/Kokoro-FastAPI) exposes an OpenAI-compatible TTS endpoint.
-
-**Installation:**
-
-```bash
-docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu
-# or GPU variant
-docker run --gpus all -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-gpu
-```
-
-**Configuration:**
-
-```json
-{
-  "tts": { "active_backend": "http", "voice": "af_heart" },
-  "http_tts": {
-    "url_template": "http://localhost:8880/v1/audio/speech",
-    "headers": [["Content-Type", "application/json"]],
-    "body_template": "{\"model\":\"kokoro\",\"input\":\"{text}\",\"voice\":\"{voice}\",\"response_format\":\"wav\"}",
-    "response_format": "wav",
-    "timeout_secs": 30
-  }
-}
-```
-
----
-
-### Fish Speech 1.5
-
-[Fish Speech](https://github.com/fishaudio/fish-speech) is a fast, multilingual, zero-shot TTS model.
-
-**Installation:**
-
-```bash
-pip install fish-speech
-fish_speech start
-```
-
-**Configuration:**
-
-```json
-{
-  "tts": { "active_backend": "http", "voice": "default" },
-  "http_tts": {
-    "url_template": "http://localhost:8880/v1/tts",
-    "headers": [["Content-Type", "application/json"]],
-    "body_template": "{\"text\":\"{text}\",\"reference_id\":\"{voice}\",\"format\":\"wav\"}",
-    "response_format": "wav",
-    "timeout_secs": 30
-  }
-}
-```
-
----
-
-### Coqui TTS Server
-
-[Coqui TTS](https://github.com/coqui-ai/TTS) can be run as a server.
-
-**Installation:**
-
-```bash
-pip install TTS
-tts-server --model_name tts_models/en/ljspeech/tacotron2-DDC
-```
-
-**Configuration:**
-
-```json
-{
-  "tts": { "active_backend": "http", "voice": "p225" },
-  "http_tts": {
-    "url_template": "http://localhost:5002/api/tts?text={text}&speaker_id={voice}",
-    "headers": [],
-    "body_template": null,
-    "response_format": "wav",
-    "timeout_secs": 60
-  }
-}
-```
-
-**Note:** The `{voice}` maps to a speaker ID. Use `GET /api/tts` for single-speaker models (omit `speaker_id`).
-
----
-
-### Chatterbox Server
-
-Run Chatterbox as an HTTP server.
-
-**Configuration:**
-
-```json
-{
-  "tts": { "active_backend": "http", "voice": "default" },
-  "http_tts": {
-    "url_template": "http://localhost:8000/generate",
-    "headers": [["Content-Type", "application/json"]],
-    "body_template": "{\"text\":\"{text}\",\"voice\":\"{voice}\"}",
-    "response_format": "wav",
-    "timeout_secs": 60
-  }
-}
-```
-
----
-
-### Generic OpenAI-Compatible TTS
-
-Any server implementing the OpenAI `/v1/audio/speech` API (e.g. LocalAI, LiteLLM proxy).
-
-**Configuration:**
-
-```json
-{
-  "tts": { "active_backend": "http", "voice": "alloy" },
-  "http_tts": {
-    "url_template": "http://localhost:8880/v1/audio/speech",
-    "headers": [
-      ["Content-Type", "application/json"],
-      ["Authorization", "Bearer sk-not-needed"]
-    ],
-    "body_template": "{\"model\":\"tts-1\",\"input\":\"{text}\",\"voice\":\"{voice}\",\"response_format\":\"wav\"}",
-    "response_format": "wav",
-    "timeout_secs": 30
-  }
-}
-```
+See [`docs_internal/development_guide.md`](./development_guide.md) and the steps in `engines-profiles-unification.md`. In short: implement `TtsBackend` in a new `tts/<engine>.rs`, register it in `tts/mod.rs` and the engine factory in `commands/tts/helpers.rs`, add a `catalog.rs` entry (so the Engine page renders a tab), and — for local engines — add an `install-<name>.ps1` under `scripts/`.

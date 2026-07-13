@@ -1,8 +1,8 @@
 # Implemented Features
 
-This document serves as a distilled reference of the features currently implemented in CopySpeak.
+This document serves as a distilled reference of the features currently implemented in CopySpeak (v0.1.10, branch `main`).
 
-> **Note (2026-02-24):** Six features have been deferred for future releases and moved to the `features-extras` branch. See the **Deferred Features** section at the end of this document for details.
+> **Note:** Features once tracked as "deferred to a `features-extras` branch" (HUD overlay, global hotkey, voice profiles, batch processing, etc.) are now implemented and shipped on `main` via the profile model. This document reflects the current state; the historical `features-extras` narrative is no longer applicable.
 
 ## Core
 
@@ -101,9 +101,9 @@ Hidden debug mode toggle in settings that enables verbose logging of all IPC cal
 
 ### Global Hotkey Registration
 
-**Status:** deferred → features-extras
+**Status:** verified
 
-Registers user-configured global shortcut using tauri-plugin-global-shortcut. Triggers speak_now command when hotkey is pressed system-wide. Moved to `features-extras` branch for future release.
+Registers user-configured global shortcut using tauri-plugin-global-shortcut. Triggers speak_now command when hotkey is pressed system-wide.
 
 ### HTTP API TTS Backend
 
@@ -158,6 +158,28 @@ Config option to save generated TTS audio to file instead of playing. User speci
 **Status:** verified
 
 IPC command and UI button to save the most recently spoken audio to user-selected file location. Caches last generated WAV bytes in memory.
+
+### Local TTS Model RAM Persistence
+
+**Status:** verified
+
+All four local TTS engines (Kitten, Piper, Kokoro, Pocket) keep their models loaded in RAM between utterances via persistent Python HTTP server processes. Models are loaded once at first use and reused for all subsequent synthesis calls, eliminating the cold-start model-load penalty on every trigger.
+
+**Implementation Details:**
+
+- Generalized state machine in `local_tts_server.rs` manages per-engine server lifecycle (start, health-poll, warmup, unload) with generation counters to prevent zombie processes
+- Per-engine Python HTTP servers (`kokoro_server.py`, `kitten_server.py`, `pocket_server.py`) load the model once at startup and serve synthesis requests over localhost HTTP
+- Automatic Python interpreter resolution — when the user-configured command is a non-Python binary, probes `python`/`python3`/`py` to find a suitable interpreter
+- Kokoro model-path auto-discovery searches project-root `kokoro/` directory in addition to system pip install paths
+- Engine-switch lifecycle: on config change, old engine servers are unloaded and new ones prewarmed; abort triggers unload+re-prewarm; all servers cleaned up on app exit
+
+**Performance Impact:**
+
+| Engine | Before (cold CLI) | After (RAM persistent) |
+|--------|-------------------|----------------------|
+| Kokoro | 7–9s | ~1.1s |
+| Kitten | 7–14s | ~0.3s |
+| Pocket | 5–16s | ~0.3–0.7s |
 
 ### Speech History Persistence
 
@@ -313,38 +335,15 @@ Shows pending TTS items when in queue mode. Displays text snippets, estimated du
 
 ---
 
-## Deferred Features (features-extras branch)
+## Notable Feature Status
 
-The following 6 features have been deferred for future release. They are fully implemented but have been moved to the `features-extras` branch to create a clean, focused v0.2 release. To access them:
+Most features described above are implemented and verified on `main`. A few are intentionally **not** part of the current scope or remain backlog:
 
-```bash
-git checkout features-extras
-```
+- **Application-Specific Whitelist/Blacklist** — Not implemented; clipboard monitoring is global.
+- **Automatic Language Detection** — Not implemented; voice/profile is user-selected.
+- **Clipboard Content Filter Rules** — Not implemented; no regex filtering of clipboard content.
+- **Batch Text-to-Speech Processing UI** — Not implemented as a dedicated UI (sequential paste/queue is available via the control server).
+- **Voice Preset Management / Import-Export** — Superseded by the profile model (`VoiceProfile`); per-profile import/export is supported.
+- **Local Usage Statistics / Statistics Dashboard** — Backlog; not implemented.
 
-### Deferred Feature List
-
-1. **Automatic Language Detection** — Auto-detect text language for voice selection
-2. **Clipboard Content Filter Rules** — Regex-based rules to prevent speaking sensitive data
-3. **Application-Specific Whitelist/Blacklist** — Per-app clipboard monitoring
-4. **Global Hotkey Registration** — System-wide keyboard shortcuts for control
-5. **HUD Overlay System** — Transparent waveform visualization during playback (includes 3 related features)
-   - HUD Waveform Visualization Component
-   - HUD Drag-to-Position Mode
-   - HUD Visual Theme Customization
-   - Multi-Monitor HUD Positioning
-6. **Batch Text-to-Speech Processing** — Process multiple texts sequentially
-7. **Keyboard Shortcuts Help Dialog** — Overlay showing all hotkeys
-8. **Custom Hotkey Configuration UI** — Interactive hotkey capture in settings
-
-### Why Deferred?
-
-These features were implemented fully but are less critical to the core use case (clipboard monitoring + TTS). By moving them to a separate branch:
-
-- ✅ **Cleaner main branch** — Focuses on core clipboard-to-speech functionality
-- ✅ **Faster builds** — Removes 4 unused dependencies (whatlang, tauri-plugin-global-shortcut, regex, lazy_static)
-- ✅ **Reduced complexity** — Less code in core paths, easier to debug
-- ✅ **Preserved work** — All implementations are safe on `features-extras` for future integration
-- ✅ **Better testing** — v0.2 release can be thoroughly tested on stable feature set
-- ✅ **Clear roadmap** — Features can be re-evaluated for v0.3+ based on user feedback
-
-All removed code from `main` is intact on `features-extras` and can be cherry-picked or merged in future releases.
+The historical `features-extras` branch narrative (HUD, global hotkey, profiles "deferred") no longer applies — those are shipped.

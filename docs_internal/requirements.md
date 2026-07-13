@@ -59,12 +59,11 @@
 
 | Feature                              | Reason                               |
 | ------------------------------------ | ------------------------------------ |
-| HUD overlay / waveform visualization | Implemented and integrated (Phase 8) |
-| Global hotkeys                       | Deferred to features-extras branch   |
-| Voice presets manager                | Not in this milestone                |
-| Speech history viewer UI             | Log exists; UI deferred              |
-| Batch TTS processing                 | Deferred                             |
-| Language detection                   | Deferred                             |
+| Language detection                   | Not in current scope; profile is user-selected |
+| Content filtering / regex redaction  | Not implemented                     |
+| Application-specific whitelist/blacklist | Not implemented; clipboard monitoring is global |
+| Speech history viewer UI             | Log exists; dedicated viewer not built |
+| Batch TTS processing UI              | Not implemented as a dedicated UI   |
 
 ## Traceability Matrix
 

@@ -32,7 +32,7 @@ Separately, engine install was half-built:
    format, stability, args, etc. live exclusively in profiles + the engine
    catalog. The Engine page never edits them.
    - Cloud tabs: API key input (+ endpoint for Microsoft) + "Test setup"
-     (reuses `test_tts_engine_config`, which builds a backend from the global
+     (reuses `test_tts_engine`, which builds a backend from the global
      provider defaults — i.e. the engine's default voice).
    - Local tabs: "Install" button (launches the installer) + docs. The
      installer's own smoke test is the verification path.

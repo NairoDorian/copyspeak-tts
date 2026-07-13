@@ -1,9 +1,9 @@
 # CopySpeak Architecture
 
-> **Version:** v0.0.5
-> **Last Updated:** 2026-03-25
-> **Status:** Pre-Production / In Active Development
-> **Note:** Five features have been deferred and are preserved on the `features-extras` branch on a differant repository: Language Detection, Content Filtering, Application Filter, Keyboard Shortcuts, and Batch Processing. HUD Overlay has been reimplemented, but needs UI improvements.
+> **Version:** v0.1.10
+> **Last Updated:** 2026-07-12
+> **Status:** Active development on `main`
+> **Note:** HUD Overlay, Global Hotkey, and the profile-based engine model are all implemented and shipped. Local engines (Kitten, Piper, Kokoro, Pocket, Chatterbox) are `uv`-managed projects under `%LOCALAPPDATA%\CopySpeak\engines\<engine>` and keep models resident in RAM via a persistent HTTP server. The generic HTTP backend is first-class (configured per profile).
 
 ---
 
@@ -70,8 +70,9 @@ CopySpeak is a Windows 11 desktop application designed to monitor the system cli
 
 CopySpeak is designed as an orchestrator, not a self-contained TTS solution:
 
-- Users install their own TTS engine (e.g., kokoro-tts, piper, espeak) or use cloud APIs (OpenAI, ElevenLabs).
-- CopySpeak calls the engine via CLI or HTTP.
+- Users install their own TTS engine (local: kitten-tts, piper, kokoro-tts, pocket-tts, chatterbox via `uv`; or cloud APIs: Edge-TTS, OpenAI, ElevenLabs, Cartesia, Google Gemini, Microsoft / Azure).
+- CopySpeak calls the engine via a profile-driven backend (local CLI / persistent HTTP server, or native Rust HTTP for cloud).
+- Synthesis is selected by **voice profiles** (engine + voice + speed + pitch + effects + per-engine knobs), not a single global backend.
 - This approach enables flexibility and allows users to leverage the best TTS technology available.
 
 ---
@@ -143,11 +144,12 @@ The backend is structured into several modules, each with specific responsibilit
 ### Module Responsibilities
 
 - **`clipboard.rs` - Clipboard State Machine**: Manages the clipboard monitoring and state transitions.
-- **`config.rs` - Configuration Persistence**: Handles the loading and saving of user configurations.
-- **`sanitize.rs` - Text Normalization**: Normalizes text before it is sent to the TTS engine.
+- **`config/mod.rs` - Configuration Persistence**: Handles the loading and saving of user configurations (per-domain config modules in `config/`).
+- **`sanitize/mod.rs` - Text Normalization**: Normalizes text before it is sent to the TTS engine.
 - **`history.rs` - Speech History Logging**: Logs the history of speech triggers.
 - **`autostart.rs` - Windows Startup Integration**: Manages the application's startup with Windows.
-- **`tts/` - Backend Abstraction**: Provides an abstraction layer for different TTS engines.
+- **`tts/` - Backend Abstraction**: Provides an abstraction layer for different TTS engines; `local_tts_server.rs` and `piper_server.rs` manage persistent local model servers.
+- **`control_server.rs` - Local HTTP Control Server**: Exposes a localhost endpoint for external integrations (Pi, Claude Code, curl).
 
 ---
 
@@ -216,10 +218,10 @@ CopySpeak is designed to be lightweight and efficient, with minimal impact on sy
 
 CopySpeak uses Tauri's multi-window architecture:
 
-| Window | File         | Purpose                           | Properties                                               |
-| ------ | ------------ | --------------------------------- | -------------------------------------------------------- |
-| Main   | `index.html` | Settings and status UI            | 1280x720, centered, visible                              |
-| HUD    | `hud.html`   | Waveform visualization & feedback | Variable size, always-on-top, transparent, click-through |
+| Window | Route        | Purpose                           | Properties                                                       |
+| ------ | ------------ | --------------------------------- | ---------------------------------------------------------------- |
+| Main   | `/` (`index.html`) | Settings and status UI            | 775x580, centered, visible                                        |
+| HUD    | `/hud` (`hud.html`) | Waveform visualization & feedback | 300x140, always-on-top, transparent, click-through, visible (parked off-screen until needed) |
 
 The HUD overlay provides real-time visual feedback including waveform visualization during playback and "Clipboard Copied" notifications during double-copy detection.
 
@@ -232,32 +234,36 @@ src-tauri/src/
 ├── main.rs              # App setup, tray icon, IPC command registration
 ├── clipboard.rs         # Double-copy detection state machine
 ├── autostart.rs         # Windows startup registration
+├── control_server.rs    # Local HTTP control server (Pi / Claude Code / curl)
 ├── fragment_queue.rs    # Text pagination queue management
 ├── pagination.rs        # Text splitting for long content
 ├── logging.rs           # Application logging
+├── secrets.rs           # Local .env secret overlay on config values
 ├── history.rs           # Speech history logging
-├── history_manager.rs   # History entry management
 ├── audio/               # Audio playback (directory-based)
 │   ├── mod.rs           # Module exports
 │   ├── player.rs        # AudioPlayer implementation
 │   ├── wav.rs           # WAV parsing
-│   ├── stream.rs        # Streaming utilities
 │   └── format.rs        # Audio format handling
 ├── commands/            # Tauri IPC commands (directory-based)
 │   ├── mod.rs           # Module exports, command registration
 │   ├── config.rs        # Config get/set commands
-│   ├── tts.rs           # TTS synthesis commands
 │   ├── playback.rs      # Playback control commands
 │   ├── history.rs       # History management commands
-│   └── queue.rs         # Queue management commands
+│   ├── queue.rs         # Queue management commands
+│   ├── post_process.rs  # LLM post-processing commands
+│   ├── update.rs        # Updater commands
+│   ├── install.rs       # Engine installer launcher
+│   └── tts/             # TTS synthesis + profile/voice/health/credentials
 ├── config/              # Configuration (directory-based)
-│   ├── mod.rs           # AppConfig, load/save
-│   ├── tts.rs           # TTS config
+│   ├── mod.rs           # AppConfig, load/save, migration
+│   ├── tts.rs           # TTS config, TtsEngine enum, VoiceProfile
 │   ├── playback.rs      # Playback config
 │   ├── trigger.rs       # Trigger config
 │   ├── general.rs       # General config
 │   ├── output.rs        # Output config
 │   ├── hotkey.rs        # Global hotkey config
+│   ├── hud.rs           # HUD config
 │   ├── sanitization.rs  # Sanitization config
 │   └── tests.rs         # Config tests
 ├── sanitize/            # Text normalization (directory-based)
@@ -266,18 +272,20 @@ src-tauri/src/
 │   ├── tts_normalize.rs # TTS text normalization
 │   └── cleanup.rs       # General cleanup
 └── tts/                 # TTS backends (directory-based)
-    ├── mod.rs           # TtsBackend trait
-    ├── cli.rs           # CLI TTS (piper, kokoro, etc.)
-    ├── http.rs          # HTTP TTS (REST API)
+    ├── mod.rs           # TtsBackend trait + engine factory
+    ├── cli.rs           # Local CLI TTS (piper, kokoro, kitten, pocket)
+    ├── http.rs          # Generic HTTP TTS (OpenAI-compatible / custom)
+    ├── edge.rs          # Edge-TTS
     ├── openai.rs        # OpenAI TTS
-    └── elevenlabs.rs    # ElevenLabs TTS
+    ├── elevenlabs.rs    # ElevenLabs TTS
+    ├── cartesia.rs      # Cartesia TTS
+    ├── google.rs        # Google Gemini TTS
+    ├── microsoft.rs     # Microsoft AI / Azure TTS
+    ├── local_tts_server.rs  # Persistent local HTTP server (uv-managed engines)
+    ├── piper_server.rs  # Piper persistent server (CUDA GPU mode)
+    └── catalog.rs       # Engine catalog types
 ```
 
-**Deferred modules** (available on `features-extras` branch):
-
-- `filter.rs` — Content sanitization and regex-based filtering
-- `language.rs` — Language detection and voice auto-selection
-- `app_source.rs` — Application-specific whitelist/blacklist filtering
 
 ### Module Responsibilities
 
@@ -298,7 +306,7 @@ IDLE ──(clipboard change)──► ARMED ──(same text within window)─�
 - Provides default values for all settings
 - Auto-creates config directory on first run
 
-.#### `sanitize/` - Text Normalization Pipeline
+#### `sanitize/` - Text Normalization Pipeline
 
 Three-pass multi-stage pipeline in `src-tauri/src/sanitize/`:
 
@@ -361,14 +369,19 @@ pub trait TtsBackend: Send + Sync {
 }
 ```
 
-**Supported backends:**
+**Supported backends** (driven by the profile model — see `config/tts.rs` `TtsEngine` and `catalog.rs`):
 
 | Backend                | Type             | Best For                                                     |
 | ---------------------- | ---------------- | ------------------------------------------------------------ |
-| **CLI Backend**        | Local process    | Offline use, privacy, local voice models (kokoro, piper)     |
-| **HTTP Backend**       | Generic REST API | Custom TTS servers, self-hosted solutions                    |
-| **OpenAI Backend**     | Cloud API        | Quick setup, good quality, 6 built-in voices                 |
-| **ElevenLabs Backend** | Cloud API        | Best quality, voice cloning, 1000+ voices, advanced controls |
+| **Local CLI**          | Local process    | Offline use, privacy, local voice models (kitten, piper, kokoro, pocket) |
+| **Local HTTP server**  | Persistent localhost server | Sub-second synthesis via RAM-resident models (uv-managed) |
+| **HTTP Backend**       | Generic REST API | OpenAI-compatible / custom TTS servers, configured per profile |
+| **Edge-TTS**           | Cloud API (free) | No API key, Microsoft Read Aloud voices                      |
+| **OpenAI**             | Cloud API        | Quick setup, good quality, 11 built-in voices                |
+| **ElevenLabs**         | Cloud API        | Best quality, voice cloning, 1000+ voices, advanced controls |
+| **Cartesia**           | Cloud API        | Low-latency streaming                                        |
+| **Google Gemini TTS**  | Cloud API        | Many prebuilt voices                                         |
+| **Microsoft / Azure**  | Cloud API        | MAI/Azure speech endpoint                                    |
 
 **ElevenLabs Features:**
 
@@ -476,10 +489,10 @@ bun x shadcn-svelte@latest add <component>
 
 - **Svelte 5** with runes (`$state`, `$effect`, `$derived`, `$props`)
 - **SvelteKit** with static adapter for Tauri
-- **Tailwind CSS v4.2** via `@tailwindcss/vite`
+- **Tailwind CSS v4** via `@tailwindcss/vite`
 - **shadcn-svelte** for UI components
 - **mode-watcher** for dark/light theme support
-- **Vite 7** for bundling with multi-page support
+- **Vite 8** for bundling with two HTML entry points (`index.html`, `hud.html`)
 
 ---
 
@@ -503,7 +516,11 @@ Commands exposed from Rust to the frontend:
 | `clear_history`           | Clear all speech history                        |
 | `delete_history_entry`    | Remove a single history entry                   |
 | `copy_history_entry_text` | Copy entry text to clipboard                    |
-| `test_tts`                | Test TTS engine with sample text                |
+| `test_tts_engine`         | Test a TTS engine with sample text                 |
+| `install_engine`         | Launch the installer for a local engine            |
+| `set_active_profile`     | Switch the active voice profile                    |
+| `list_tts_engines`       | List available engines (catalog)                   |
+| `list_tts_voices`        | List voices for an engine (catalog)                |
 
 ### IPC Events (Rust → Frontend)
 
@@ -776,33 +793,18 @@ The CLI TTS backend spawns external processes. Security considerations:
 
 ---
 
-## Deferred Features
-
-The following 4 features have been deferred for future release and are preserved on the `features-extras` branch:
-
-1. **Language Detection** — Auto-detect text language for voice selection
-2. **Content Filtering** — Regex-based rules to prevent speaking sensitive data
-3. **Application Filter** — Whitelist/blacklist specific applications
-4. **Batch Processing** — Process multiple texts sequentially with UI
-
-To access these features:
-
-```bash
-git checkout features-extras
-```
-
 ## Implemented Features
 
-The following features have been implemented and are available in the main branch:
+The following features are implemented and available on `main`:
 
 - **HUD Overlay** — Transparent waveform visualization during playback with clipboard notification feedback
-- **Global Hotkey** — Single configurable hotkey (default: Win+Shift+A) to trigger speech from clipboard content, providing an alternative to the double-copy trigger
+- **Global Hotkey** — Configurable hotkey (via `tauri-plugin-global-shortcut`) to trigger speech from clipboard content
+- **Voice Profiles** — Named, swappable profiles (engine + voice + speed + pitch + effects + per-engine knobs)
+- **Local engine RAM persistence** — Persistent HTTP server keeps local models resident between utterances
+- **LLM post-processing** — Optional rewrite pass before synthesis
 
 ## Future Considerations
 
-- **Multiple Voice Profiles**: Quick-switch between voice configurations
-- **Clipboard History**: Replay recent clips without re-copying
 - **Cross-Platform**: macOS/Linux support (clipboard API abstraction needed)
 - **Pronunciation Dictionary**: Custom word pronunciations
-- **Update Checker**: Automated version checking
 - **Usage Statistics**: Local tracking of TTS activity

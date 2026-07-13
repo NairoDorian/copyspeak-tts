@@ -20,15 +20,11 @@ bun run tauri dev
 ### Core
 
 - **Multiple trigger modes**: Double-copy (1.5s window), hotkey, or manual paste/play
-- **11 TTS engines**:
-  - **Local CLI** — Piper, Kokoro, Kitten, Chatterbox, or any CLI TTS tool via local subprocess
-  - **Edge TTS** — Free Microsoft Edge Read Aloud backend (default)
-  - **OpenAI TTS** — Cloud API with 9 voices
-  - **ElevenLabs TTS** — Cloud API with voice library support
-  - **Cartesia TTS** — Sonic 3.5 cloud API
-  - **Google TTS** — Cloud API
-  - **Microsoft TTS** — Azure Cognitive Services
-  - **HTTP TTS** — Generic HTTP endpoint backend
+- **11 TTS engines** across cloud and local:
+  - **Cloud**: Edge-TTS (free), OpenAI (11 voices), ElevenLabs (voice library + cloning), Cartesia (low-latency streaming), Google Gemini TTS, Microsoft / Azure AI
+  - **Local** (installed via `uv` into `%LOCALAPPDATA%\CopySpeak\engines\<engine>`): Kitten TTS (8 voices, CPU ONNX), Piper (20+ EN US voices, persistent RAM caching, optional CUDA GPU), Kokoro TTS (~11 voices), Pocket TTS (8+ voices), Chatterbox (zero-shot + emotion)
+- **Voice profiles** — Create, edit, and switch between named voice profiles bundling engine, voice, speed, pitch, effects, and per-engine knobs as one swappable unit
+- **Persistent RAM caching** — Local engines keep models loaded between utterances via a persistent HTTP server for sub-second synthesis
 - **HUD overlay** — Floating heads-up display with real-time waveform visualization
 - **History** — Persistent TTS generation history with playback and batch management
 - **Voice profiles** — Create, edit, and switch between named voice profiles with engine, voice, speed, pitch, and effects settings
@@ -57,13 +53,13 @@ bun run tauri dev
 
 ## Tech Stack
 
-| Component       | Technology                     |
-| --------------- | ------------------------------ |
-| Backend         | Rust (Tauri v2)                |
-| Frontend        | Svelte 5, TypeScript, Vite     |
-| Package Manager | Bun                            |
-| Audio           | rodio                          |
-| UI              | shadcn-svelte, Tailwind CSS v4 |
+| Component       | Technology                                       |
+| --------------- | ------------------------------------------------ |
+| Backend         | Rust (Tauri v2)                                  |
+| Frontend        | Svelte 5, TypeScript, Vite 8, Vitest 4 (happy-dom) |
+| Package Manager | Bun                                              |
+| Audio           | rodio                                            |
+| UI              | shadcn-svelte, Tailwind CSS v4, mode-watcher     |
 
 ## Project Structure
 
@@ -94,26 +90,35 @@ src/                     # Svelte 5 frontend
 src-tauri/src/           # Rust backend
 ├── main.rs              # Entry point, IPC registration
 ├── config/              # Persistence modules
-│   └── tts.rs           # TTS config types & engine enum
+│   └── tts.rs           # TTS config types, engine enum, VoiceProfile
 ├── commands/            # IPC handlers
-│   └── tts/             # Synthesis commands
+│   └── tts/             # Synthesis, profiles, voices, health, credentials
 ├── tts/                 # TTS backend implementations
 │   ├── edge.rs          # Edge TTS
 │   ├── openai.rs        # OpenAI
 │   ├── elevenlabs.rs    # ElevenLabs
 │   ├── cartesia.rs      # Cartesia
-│   ├── google.rs        # Google
-│   ├── microsoft.rs     # Microsoft
+│   ├── google.rs        # Google Gemini TTS
+│   ├── microsoft.rs     # Microsoft AI / Azure
 │   ├── http.rs          # Generic HTTP
-│   ├── cli.rs           # Local CLI engines
+│   ├── cli.rs           # Local CLI engines (Kokoro, Kitten, Pocket, Piper)
+│   ├── local_tts_server.rs  # Persistent local HTTP server
+│   ├── piper_server.rs  # Piper persistent server (CUDA GPU mode)
 │   └── catalog.rs       # Engine catalog types
 ├── clipboard.rs         # Double-copy detection
-├── audio.rs             # Playback
-├── post_process.rs      # LLM post-processing
+├── audio/               # Playback (player, format, wav)
+├── post_process/        # LLM post-processing
+├── control_server.rs    # Local HTTP control server (Pi / Claude Code)
 └── sanitize/            # Text normalization
 ```
 
 ## Commands
+
+> **Tip — RTK (Rust Token Killer)**: Install this tool to get compact, token-efficient output for Cargo/Git/test commands (especially useful for AI coding agents). This installs the latest `dev-*` pre-release (rc) tag:
+> ```powershell
+> $tag=(git ls-remote --tags https://github.com/rtk-ai/rtk|Select-String 'refs/tags/dev-'|ForEach-Object{($_-split 'refs/tags/')[1].Trim()-replace '\^\{\}$',''}|Sort-Object{if($_-match 'dev-(\d+)\.(\d+)\.(\d+)-rc\.(\d+)'){[version]"$($matches[1]).$($matches[2]).$($matches[3])";[int]$matches[4]}}|Select-Object -Last 1);cargo install --git https://github.com/rtk-ai/rtk --tag $tag --force
+> ```
+> Then prefix commands with `rtk` (e.g. `rtk cargo test`, `rtk git log`).
 
 ```bash
 # Development
@@ -121,15 +126,15 @@ bun run tauri dev           # Full app with hot-reload
 bun run dev                 # Frontend only (port 5173)
 
 # Build
-bun run tauri build         # Production build
+bun run tauri build --bundles nsis   # Production build (NSIS installer)
 
-bun run check               # TypeScript/Svelte type checking
-bun run check:watch         # Watch mode for type checking
+bun run check                        # TypeScript/Svelte type checking
+bun run check:watch                  # Watch mode for type checking
 
-# Testing (Frontend)
-bun run test                # Run all frontend tests (vitest)
-bun run test <name>         # Run single frontend test
-bun run test:watch          # Watch mode
+# Testing (Frontend — runs in the happy-dom environment)
+bun run test                         # Run all frontend tests (vitest)
+bun run test <name>                  # Run single frontend test
+bun run test:watch                   # Watch mode
 
 # Testing (Rust)
 cd src-tauri && cargo test             # Run all Rust tests
@@ -138,7 +143,7 @@ cd src-tauri && cargo check            # Type check Rust
 cd src-tauri && cargo clippy           # Lint Rust
 
 # Formatting
-bun format                   # Biome + Prettier hybrid format
+  bun format                   # Prettier format (`prettier --write .`)
 
 # Version Bumping
 bun run bump                # Patch version bump (0.0.x)
