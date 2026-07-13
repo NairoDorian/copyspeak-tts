@@ -206,6 +206,92 @@
     }
   }
 
+  async function applyLocalPreset(index: number, preset: string) {
+    const profile = localConfig.tts.profiles[index];
+    const base = profile.engine_options && typeof profile.engine_options === "object" && !Array.isArray(profile.engine_options) ? profile.engine_options : {};
+
+    let command = "uv";
+    let args_template: string[] = [];
+    let defaultVoice = "default";
+
+    if (preset === "piper") {
+      command = "uv";
+      args_template = [
+        "run",
+        "--project",
+        "{engine_dir}/piper",
+        "python",
+        "{engine_dir}/piper/scripts/copyspeak-piper.py",
+        "--text-file",
+        "{input}",
+        "--voice",
+        "{voice}",
+        "--output",
+        "{output}"
+      ];
+      defaultVoice = "en_US-amy-medium";
+    } else if (preset === "kitten") {
+      command = "uv";
+      args_template = [
+        "run",
+        "--project",
+        "{engine_dir}/kitten",
+        "python",
+        "{engine_dir}/kitten/scripts/copyspeak-kitten.py",
+        "--text-file",
+        "{input}",
+        "--voice",
+        "{voice}",
+        "--output",
+        "{output}"
+      ];
+      defaultVoice = "Rosie";
+    } else if (preset === "chatterbox") {
+      command = "uv";
+      args_template = [
+        "run",
+        "--project",
+        "{engine_dir}/chatterbox",
+        "python",
+        "{engine_dir}/chatterbox/scripts/copyspeak-chatterbox.py",
+        "--text-file",
+        "{input}",
+        "--voice",
+        "{voice}",
+        "--output",
+        "{output}"
+      ];
+      defaultVoice = "default";
+    } else if (preset === "kokoro") {
+      command = "kokoro-tts";
+      args_template = [
+        "{input}",
+        "{output}",
+        "--voice",
+        "{voice}",
+        "--model",
+        "{engine_dir}/kokoro/models/kokoro-v1.0.onnx",
+        "--voices",
+        "{engine_dir}/kokoro/models/voices-v1.0.bin"
+      ];
+      defaultVoice = "af_heart";
+    }
+
+    profile.engine_options = {
+      ...base,
+      engine: "local",
+      preset,
+      command,
+      args_template
+    } as VoiceProfile["engine_options"];
+
+    // Update profile voice to default
+    profile.voice = defaultVoice;
+
+    // Trigger voice refresh to query local voice models (like piper voices)
+    await refreshVoices("local");
+  }
+
   function makeId(): string {
     return `profile-${crypto.randomUUID().slice(0, 8)}`;
   }
@@ -426,7 +512,22 @@
           {#if activeCatalogEntry.options.length}
             {#each activeCatalogEntry.options as option (option.key)}
               <SettingRow label={option.label} tooltip={option.help}>
-                {#if option.kind === "number"}
+                {#if active.engine === "local" && option.key === "preset"}
+                  <Select
+                    options={[
+                      { value: "piper", label: "Piper TTS" },
+                      { value: "kokoro", label: "Kokoro TTS" },
+                      { value: "kitten", label: "KittenTTS" },
+                      { value: "chatterbox", label: "Chatterbox" }
+                    ]}
+                    value={String(optionValue(active, option) ?? "piper")}
+                    onchange={(e) => {
+                      const newPreset = (e.target as HTMLSelectElement).value;
+                      applyLocalPreset(activeIndex, newPreset);
+                    }}
+                    class="w-56"
+                  />
+                {:else if option.kind === "number"}
                   <Input
                     type="number"
                     value={String(optionValue(active, option) ?? "")}
