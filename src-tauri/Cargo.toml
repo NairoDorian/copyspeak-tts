@@ -32,7 +32,7 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
 log = "0.4"
 flexi_logger = { version = "0.31", features = ["compress"] }
-reqwest = { version = "0.13", features = ["blocking", "json"] }
+reqwest = { version = "0.13", features = ["blocking", "json", "query"] }
 base64 = "0.22"
 regex = "1"
 lazy_static = "1"

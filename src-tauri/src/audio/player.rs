@@ -2,7 +2,7 @@
 // Handles playback with interrupt/queue modes via a dedicated audio thread.
 
 use crate::config::RetriggerMode;
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
+use rodio::{Decoder, MixerDeviceSink, Player, Source};
 use std::io::{BufReader, Cursor};
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,9 +28,8 @@ pub(super) enum AudioCommand {
 
 /// Internal AudioPlayer that runs on a dedicated thread (not Send+Sync)
 struct AudioPlayerInner {
-    _stream: Option<OutputStream>,
-    stream_handle: Option<OutputStreamHandle>,
-    sink: Option<Sink>,
+    _stream: Option<MixerDeviceSink>,
+    sink: Option<Player>,
     mode: RetriggerMode,
     volume: u8,
     playback_start: Option<std::time::Instant>,
@@ -43,7 +42,6 @@ impl AudioPlayerInner {
     fn new() -> Self {
         Self {
             _stream: None,
-            stream_handle: None,
             sink: None,
             mode: RetriggerMode::Interrupt,
             volume: 100,
@@ -131,18 +129,12 @@ impl AudioPlayerInner {
         }
 
         log::debug!("Creating new stream and sink for playback");
-        let (stream, handle) = OutputStream::try_default().map_err(|e| {
-            log::error!("Failed to open default audio output device: {}", e);
-            format!("No audio output device found: {}", e)
+        let stream = rodio::DeviceSinkBuilder::open_default_sink().map_err(|e| {
+            log::error!("Failed to open default audio output device: {:?}", e);
+            format!("No audio output device found: {:?}", e)
         })?;
 
-        let sink = Sink::try_new(&handle).map_err(|e| {
-            log::error!("Failed to create audio sink: {}", e);
-            format!(
-                "Failed to initialize audio playback: {}. Check your audio device settings.",
-                e
-            )
-        })?;
+        let sink = Player::connect_new(&stream.mixer());
         let cursor = Cursor::new(audio_bytes);
         let source = Decoder::new(cursor).map_err(|e| {
             log::error!("Failed to decode audio: {}", e);
@@ -154,7 +146,6 @@ impl AudioPlayerInner {
 
         self.sink = Some(sink);
         self._stream = Some(stream);
-        self.stream_handle = Some(handle);
         self.playback_start = Some(std::time::Instant::now());
         self.paused_duration = std::time::Duration::ZERO;
         self.pause_start = None;
@@ -208,25 +199,18 @@ impl AudioPlayerInner {
             )
         })?;
 
-        let (stream, handle) = OutputStream::try_default().map_err(|e| {
-            log::error!("Failed to find default audio output device: {}", e);
-            format!("No audio output device found: {}", e)
+        let stream = rodio::DeviceSinkBuilder::open_default_sink().map_err(|e| {
+            log::error!("Failed to find default audio output device: {:?}", e);
+            format!("No audio output device found: {:?}", e)
         })?;
 
-        let sink = Sink::try_new(&handle).map_err(|e| {
-            log::error!("Failed to create audio sink: {}", e);
-            format!(
-                "Failed to initialize audio playback: {}. Check your audio device settings.",
-                e
-            )
-        })?;
+        let sink = Player::connect_new(&stream.mixer());
 
         sink.set_volume(self.volume as f32 / 100.0);
         sink.append(source.buffered());
 
         self.sink = Some(sink);
         self._stream = Some(stream);
-        self.stream_handle = Some(handle);
         self.playback_start = Some(std::time::Instant::now());
         self.paused_duration = std::time::Duration::ZERO;
         self.pause_start = None;
@@ -248,7 +232,6 @@ impl AudioPlayerInner {
             log::debug!("stop() called but no active playback");
         }
         self._stream = None;
-        self.stream_handle = None;
         self.playback_start = None;
         self.paused_duration = std::time::Duration::ZERO;
         self.pause_start = None;

@@ -8,7 +8,7 @@ use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager};
 
 use windows::core::w;
-use windows::Win32::Foundation::{HGLOBAL, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HINSTANCE, HGLOBAL, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::DataExchange::{
     AddClipboardFormatListener, CloseClipboard, GetClipboardData, OpenClipboard,
     RemoveClipboardFormatListener,
@@ -79,7 +79,7 @@ pub fn set_clipboard_text(text: &str) -> Result<(), String> {
 
         let _ = GlobalUnlock(handle);
 
-        SetClipboardData(CF_UNICODETEXT, HANDLE(handle.0))
+        SetClipboardData(CF_UNICODETEXT, Some(HANDLE(handle.0)))
             .map_err(|_| "Failed to set clipboard data".to_string())?;
 
         Ok(())
@@ -403,7 +403,6 @@ pub fn run_clipboard_listener(app: AppHandle, is_listening: Arc<AtomicBool>) {
             return;
         }
 
-        // Create a message-only window (invisible, doesn't appear in taskbar)
         let hwnd = match CreateWindowExW(
             Default::default(),
             class_name,
@@ -413,9 +412,9 @@ pub fn run_clipboard_listener(app: AppHandle, is_listening: Arc<AtomicBool>) {
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            HWND_MESSAGE, // Message-only window
+            Some(HWND_MESSAGE), // Message-only window
             None,
-            hinstance,
+            Some(HINSTANCE(hinstance.0)),
             None,
         ) {
             Ok(h) => h,

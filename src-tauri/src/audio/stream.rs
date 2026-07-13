@@ -236,16 +236,16 @@ impl<R: Read> Iterator for WavStreamSource<R> {
 }
 
 impl<R: Read> Source for WavStreamSource<R> {
-    fn current_frame_len(&self) -> Option<usize> {
+    fn current_span_len(&self) -> Option<usize> {
         None
     }
 
-    fn channels(&self) -> u16 {
-        self.channels
+    fn channels(&self) -> std::num::NonZero<u16> {
+        std::num::NonZero::new(self.channels).unwrap_or(std::num::NonZero::new(1).unwrap())
     }
 
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate
+    fn sample_rate(&self) -> std::num::NonZero<u32> {
+        std::num::NonZero::new(self.sample_rate).unwrap_or(std::num::NonZero::new(44100).unwrap())
     }
 
     fn total_duration(&self) -> Option<std::time::Duration> {
