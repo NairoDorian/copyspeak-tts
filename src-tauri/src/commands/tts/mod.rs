@@ -9,6 +9,7 @@
 //   credentials.rs — check_elevenlabs_credentials, check_openai_credentials
 //   voices.rs      — list_elevenlabs_voices, get_elevenlabs_voice_by_id, get_elevenlabs_output_formats
 
+mod catalog;
 mod credentials;
 mod health;
 pub(crate) mod helpers;
@@ -20,6 +21,7 @@ mod voices;
 // Glob re-exports so Tauri's `generate_handler!` can find the hidden
 // `__cmd__*` items that the `#[tauri::command]` macro emits alongside each
 // public function.
+pub use catalog::*;
 pub use credentials::*;
 pub use health::*;
 pub use profiles::*;

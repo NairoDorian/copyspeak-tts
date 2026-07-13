@@ -46,11 +46,14 @@ impl Drop for SynthesisGuard {
 // ── Backend / voice / engine helpers ────────────────────────────────────────
 
 /// Create a TTS backend instance based on the active backend config.
+#[inline]
 pub(crate) fn create_backend(active: &TtsEngine, tts_config: &TtsConfig) -> Box<dyn TtsBackend> {
     match active {
         TtsEngine::Local => Box::new(CliTtsBackend::new(
             tts_config.command.clone(),
             tts_config.args_template.clone(),
+            tts_config.cuda,
+            tts_config.preset.clone(),
         )),
         TtsEngine::OpenAI => Box::new(crate::tts::openai::OpenAiTtsBackend::new(
             tts_config.openai.clone(),
@@ -90,7 +93,10 @@ pub(crate) fn create_backend_from_effective(
                 .and_then(|o| o.args_template.clone())
                 .filter(|items| !items.is_empty())
                 .unwrap_or_else(|| tts_config.args_template.clone());
-            Box::new(CliTtsBackend::new(command, args_template))
+            let preset = opts
+                .and_then(|o| o.preset.clone())
+                .unwrap_or_else(|| tts_config.preset.clone());
+            Box::new(CliTtsBackend::new(command, args_template, tts_config.cuda, preset))
         }
         TtsEngine::OpenAI => {
             let mut config = tts_config.openai.clone();
@@ -209,6 +215,7 @@ pub(crate) fn create_backend_from_effective(
 }
 
 /// Get the voice string for the active backend.
+#[inline]
 pub(crate) fn voice_for_backend(active: &TtsEngine, tts_config: &TtsConfig) -> String {
     match active {
         TtsEngine::Local => tts_config.voice.clone(),
@@ -396,6 +403,7 @@ pub(crate) fn resolve_effective(tts_config: &TtsConfig) -> EffectiveTtsRequest {
 }
 
 /// Get the engine string identifier for a backend (legacy function, prefer engine_identifier).
+#[inline]
 pub(crate) fn engine_str(active: &TtsEngine) -> &'static str {
     match active {
         TtsEngine::Local => "local",
