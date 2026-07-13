@@ -93,13 +93,23 @@ export function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
   v.setUint16(34, 16, true);
   ws(36, "data");
   v.setUint32(40, dataSize, true);
-  let off = 44;
+
+  // Bulk interleaved write using Int16Array — much faster than per-sample setInt16
+  // Note: TypedArray views on ArrayBuffer (like Int16Array) use CPU-native byte order.
+  // WAV format requires little-endian. All modern client platforms (x86_64, ARM64) are little-endian.
+  const i16View = new Int16Array(ab, 44, N * numCh);
+  const channels: Float32Array[] = [];
+  for (let c = 0; c < numCh; c++) {
+    channels.push(buffer.getChannelData(c));
+  }
   for (let i = 0; i < N; i++) {
     for (let c = 0; c < numCh; c++) {
-      v.setInt16(off, Math.max(-1, Math.min(1, buffer.getChannelData(c)[i])) * 0x7fff, true);
-      off += 2;
+      const s = channels[c][i];
+      const clamped = s < -1 ? -1 : s > 1 ? 1 : s;
+      i16View[i * numCh + c] = clamped * 0x7fff;
     }
   }
+
   return new Blob([ab], { type: "audio/wav" });
 }
 

@@ -266,6 +266,7 @@
                         value={String(localConfig.trigger.double_copy_window_ms)}
                         onchange={(e) => {
                           const raw = (e.target as HTMLInputElement).value;
+                          if (!localConfig) return;
                           localConfig.trigger.double_copy_window_ms =
                             raw === "" ? 1500 : Math.max(100, Number(raw));
                         }}

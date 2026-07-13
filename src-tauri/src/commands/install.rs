@@ -4,6 +4,8 @@
 // in a detached window. The installer script owns the window and any prompts;
 // this command returns immediately. No output is streamed back in v1.
 
+use std::fs;
+use std::io;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -21,6 +23,7 @@ fn installer_script_for(engine: &str) -> Result<&'static str, String> {
         "kitten" | "kittentts" | "kitten-tts" => Ok("install-kittentts.ps1"),
         "piper" => Ok("install-piper.ps1"),
         "kokoro" | "kokoro-tts" => Ok("install-kokoro.ps1"),
+        "pocket" | "pocket-tts" => Ok("install-pocket.ps1"),
         "edge" | "edge-tts" => Ok("install-edge-tts.ps1"),
         other => Err(format!("unknown engine installer: {other}")),
     }
@@ -104,4 +107,82 @@ pub fn install_engine(engine: String) -> Result<(), String> {
         let _ = script_str;
         Err("Engine installers are Windows-only.".into())
     }
+}
+
+// ── KittenTTS installer (user commands) ──────────────────────────────────────
+
+const INSTALLER_SCRIPT: &str = include_str!("../../../scripts/install-kittentts.ps1");
+const CLI_SCRIPT: &str = "";
+
+fn write_to_temp(content: &str, temp_dir: &std::path::Path, filename: &str) -> io::Result<PathBuf> {
+    let dest = temp_dir.join(filename);
+    fs::write(&dest, content)?;
+    Ok(dest)
+}
+
+#[tauri::command]
+pub fn get_installer_script_path() -> String {
+    let temp_dir = std::env::temp_dir().join("copyspeak-installer");
+    temp_dir.join("install-kittentts.ps1").display().to_string()
+}
+
+#[tauri::command]
+pub fn run_kittentts_installer() -> Result<(), String> {
+    let temp_dir = std::env::temp_dir().join("copyspeak-installer");
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp directory: {}", e))?;
+
+    let script_path = write_to_temp(INSTALLER_SCRIPT, &temp_dir, "install-kittentts.ps1")
+        .map_err(|e| format!("Failed to write installer script: {}", e))?;
+
+    let _ = write_to_temp(CLI_SCRIPT, &temp_dir, "kittentts-cli.py");
+
+    let script_path_str = script_path.display().to_string();
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut cmd = Command::new("pwsh.exe");
+        let script_wrapper = format!(
+            r#"$ErrorActionPreference = 'Continue'; & '{script}'; $exitCode = $LASTEXITCODE; Write-Host ''; if ($exitCode -eq 0) {{ Write-Host 'Installation successful!' -ForegroundColor Green }} else {{ Write-Host 'Installation failed with exit code:' $exitCode -ForegroundColor Red }}; Write-Host ''; Write-Host 'Press any key to close...' -ForegroundColor Cyan; $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown'); exit $exitCode"#,
+            script = script_path_str
+        );
+
+        cmd.args([
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Normal",
+            "-Command",
+            &script_wrapper,
+        ]);
+
+        match cmd.spawn() {
+            Ok(_) => {
+                log::info!("Opened KittenTTS installer in new PowerShell 7 window");
+            }
+            Err(_) => {
+                log::warn!("pwsh.exe not found, falling back to powershell.exe");
+                let mut cmd_fallback = Command::new("powershell.exe");
+                cmd_fallback.args([
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-WindowStyle",
+                    "Normal",
+                    "-Command",
+                    &script_wrapper,
+                ]);
+
+                cmd_fallback
+                    .spawn()
+                    .map_err(|e| format!("Failed to launch installer: {}", e))?;
+                log::info!("Opened KittenTTS installer in new Windows PowerShell window");
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        return Err("Installer only available on Windows".into());
+    }
+
+    Ok(())
 }

@@ -9,10 +9,10 @@ use std::sync::Mutex;
 
 /// Character count buckets for timing estimates.
 /// Smaller buckets for short texts (higher variance), larger for long texts.
-const CHAR_BUCKETS: &[u32] = &[0, 500, 2000, 5000, 10000, std::u32::MAX];
+const CHAR_BUCKETS: &[u32] = &[0, 500, 2000, 5000, 10000, u32::MAX];
 
 /// Get the bucket index for a given character count.
-fn get_bucket_index(char_count: usize) -> usize {
+pub fn get_bucket_index(char_count: usize) -> usize {
     let count = char_count as u32;
     for (i, &threshold) in CHAR_BUCKETS.iter().enumerate() {
         if count < threshold {
@@ -20,28 +20,6 @@ fn get_bucket_index(char_count: usize) -> usize {
         }
     }
     CHAR_BUCKETS.len() - 2
-}
-
-/// Get the bucket label for display/debugging.
-#[allow(dead_code)]
-fn get_bucket_label(char_count: usize) -> String {
-    let idx = get_bucket_index(char_count);
-    let start = CHAR_BUCKETS[idx];
-    let end = CHAR_BUCKETS.get(idx + 1).copied().unwrap_or(std::u32::MAX);
-    if end == std::u32::MAX {
-        format!("{}+", start)
-    } else {
-        format!("{}-{}", start, end)
-    }
-}
-
-/// Single timing entry for a synthesis operation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct TimingSample {
-    pub duration_ms: u64,
-    pub char_count: u32,
-    pub timestamp: DateTime<Utc>,
 }
 
 /// Aggregated timing data for a specific backend/voice/bucket.
@@ -279,6 +257,7 @@ pub fn load() -> TelemetryLog {
 }
 
 /// Save telemetry to disk.
+/// Write-then-rename so a crash mid-write can't truncate the file.
 pub fn save(telemetry: &TelemetryLog) {
     let path = telemetry_path();
     if let Some(parent) = path.parent() {
@@ -287,7 +266,8 @@ pub fn save(telemetry: &TelemetryLog) {
     let json = serde_json::to_string_pretty(telemetry);
     match json {
         Ok(j) => {
-            if let Err(e) = std::fs::write(&path, j) {
+            let tmp = path.with_extension("json.tmp");
+            if let Err(e) = std::fs::write(&tmp, j).and_then(|_| std::fs::rename(&tmp, &path)) {
                 log::warn!("Failed to save telemetry: {e}");
             }
         }
@@ -295,7 +275,15 @@ pub fn save(telemetry: &TelemetryLog) {
     }
 }
 
-/// Record a timing sample and persist.
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// How often to persist telemetry to disk (every N samples).
+const SAVE_EVERY_N_SAMPLES: u32 = 10;
+
+/// Counter for deferred telemetry saves — avoids disk I/O on every synthesis.
+static SAMPLE_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+/// Record a timing sample and persist every N samples.
 pub fn record_sample(
     telemetry: &Mutex<TelemetryLog>,
     backend: &str,
@@ -303,9 +291,12 @@ pub fn record_sample(
     char_count: usize,
     duration_ms: u64,
 ) {
-    let mut tel = telemetry.lock().unwrap();
+    let mut tel = telemetry.lock().unwrap_or_else(|p| p.into_inner());
     tel.record(backend, voice, char_count, duration_ms);
-    save(&tel);
+    let count = SAMPLE_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
+    if count.is_multiple_of(SAVE_EVERY_N_SAMPLES) {
+        save(&tel);
+    }
 }
 
 /// Get an estimate without modifying the log.
@@ -315,7 +306,7 @@ pub fn get_estimate(
     voice: &str,
     char_count: usize,
 ) -> (Option<u64>, f32) {
-    let tel = telemetry.lock().unwrap();
+    let tel = telemetry.lock().unwrap_or_else(|p| p.into_inner());
     tel.estimate(backend, voice, char_count)
 }
 
@@ -326,7 +317,7 @@ pub fn get_estimate_paginated(
     voice: &str,
     fragment_char_counts: &[usize],
 ) -> (Option<u64>, f32, Vec<Option<u64>>) {
-    let tel = telemetry.lock().unwrap();
+    let tel = telemetry.lock().unwrap_or_else(|p| p.into_inner());
     tel.estimate_paginated(backend, voice, fragment_char_counts)
 }
 

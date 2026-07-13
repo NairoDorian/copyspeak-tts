@@ -8,7 +8,7 @@ use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager};
 
 use windows::core::w;
-use windows::Win32::Foundation::{HGLOBAL, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HGLOBAL, HWND, LPARAM, LRESULT, WPARAM, HINSTANCE};
 use windows::Win32::System::DataExchange::{
     AddClipboardFormatListener, CloseClipboard, GetClipboardData, OpenClipboard,
     RemoveClipboardFormatListener,
@@ -21,10 +21,36 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_CLIPBOARDUPDATE, WM_DESTROY, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
-/// Payload emitted to the frontend when TTS should trigger.
-#[derive(Clone, serde::Serialize)]
-pub struct SpeakRequest {
-    pub text: String,
+/// Trigger speak_queued natively for already-sanitized double-copy text.
+/// Synthesis used to round-trip through the hidden main webview
+/// ("speak-request" event → frontend invoke), which added two full-text IPC
+/// serializations and silently dropped triggers until the frontend finished
+/// mounting. Dispatching directly removes that hop.
+fn spawn_speak_queued(app: &AppHandle, text: String) {
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let config: tauri::State<std::sync::Mutex<crate::config::AppConfig>> = app_handle.state();
+        let player: tauri::State<std::sync::Mutex<crate::audio::AudioPlayer>> = app_handle.state();
+        let history: tauri::State<std::sync::Mutex<crate::history::HistoryLog>> =
+            app_handle.state();
+        let queue: tauri::State<std::sync::Mutex<crate::fragment_queue::FragmentQueue>> =
+            app_handle.state();
+        let telemetry_state: tauri::State<std::sync::Mutex<crate::telemetry::TelemetryLog>> =
+            app_handle.state();
+        if let Err(e) = crate::commands::speak_queued(
+            app_handle.clone(),
+            config,
+            player,
+            history,
+            queue,
+            telemetry_state,
+            Some(text),
+        )
+        .await
+        {
+            log::error!("[Clipboard] speak_queued failed: {}", e);
+        }
+    });
 }
 
 /// Payload emitted when clipboard content changes.
@@ -49,7 +75,7 @@ pub fn get_clipboard_text() -> Option<String> {
 /// Set clipboard text to the specified string.
 /// Returns Ok(()) on success, or an error message on failure.
 pub fn set_clipboard_text(text: &str) -> Result<(), String> {
-    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Foundation::{GlobalFree, HANDLE};
     use windows::Win32::System::DataExchange::{EmptyClipboard, SetClipboardData};
     use windows::Win32::System::Memory::{GlobalAlloc, GMEM_MOVEABLE};
 
@@ -72,6 +98,7 @@ pub fn set_clipboard_text(text: &str) -> Result<(), String> {
 
         let ptr = GlobalLock(handle);
         if ptr.is_null() {
+            let _ = GlobalFree(Some(handle));
             return Err("Failed to lock memory".to_string());
         }
 
@@ -79,8 +106,11 @@ pub fn set_clipboard_text(text: &str) -> Result<(), String> {
 
         let _ = GlobalUnlock(handle);
 
-        SetClipboardData(CF_UNICODETEXT, HANDLE(handle.0))
-            .map_err(|_| "Failed to set clipboard data".to_string())?;
+        // Ownership transfers to the system only on success — free on failure.
+        if SetClipboardData(CF_UNICODETEXT, Some(HANDLE(handle.0))).is_err() {
+            let _ = GlobalFree(Some(handle));
+            return Err("Failed to set clipboard data".to_string());
+        }
 
         Ok(())
     }
@@ -116,6 +146,7 @@ impl ClipboardState {
         }
 
         // 2. Check for double copy
+        #[allow(clippy::match_like_matches_macro)]
         let should_speak = match (&self.last_text, self.last_copy_time) {
             (Some(prev), Some(time))
                 if prev == new_text
@@ -221,6 +252,9 @@ struct ListenerContext {
     app: AppHandle,
     is_listening: Arc<AtomicBool>,
     state: ClipboardState,
+    /// Last time a clipboard-change event was emitted — dedupes the multiple
+    /// WM_CLIPBOARDUPDATE events Windows fires per Ctrl+C.
+    last_change_emit: Option<Instant>,
 }
 
 /// Window procedure for the clipboard listener window.
@@ -237,9 +271,8 @@ unsafe extern "system" fn clipboard_wndproc(
                     if let Some(text) = read_clipboard_text() {
                         let text_len = text.len();
                         let text_preview: String = text.chars().take(50).collect();
-                        let timestamp = chrono::Local::now().format("%H:%M:%S%.3f");
-
                         if crate::logging::is_debug_mode() {
+                            let timestamp = chrono::Local::now().format("%H:%M:%S%.3f");
                             log::debug!("[Clipboard] Change detected at {}", timestamp);
                             log::debug!("[Clipboard] Text length: {} chars", text_len);
                             log::debug!(
@@ -251,9 +284,22 @@ unsafe extern "system" fn clipboard_wndproc(
                             log::debug!("[Clipboard] Change detected: {} chars", text_len);
                         }
 
-                        let _ = ctx
-                            .app
-                            .emit("clipboard-change", ClipboardChange { text: text.clone() });
+                        // The frontend listener ignores the payload, so emit a
+                        // short preview instead of serializing multi-MB copies
+                        // to every webview, and dedupe rapid duplicate events.
+                        let now = Instant::now();
+                        let should_emit = ctx
+                            .last_change_emit
+                            .is_none_or(|t| now.duration_since(t).as_millis() >= 50);
+                        if should_emit {
+                            ctx.last_change_emit = Some(now);
+                            let _ = ctx.app.emit(
+                                "clipboard-change",
+                                ClipboardChange {
+                                    text: text.chars().take(200).collect(),
+                                },
+                            );
+                        }
 
                         if !ctx.is_listening.load(Ordering::Relaxed) {
                             if crate::logging::is_debug_mode() {
@@ -264,31 +310,25 @@ unsafe extern "system" fn clipboard_wndproc(
                             return;
                         }
 
-                        let (trigger_window_ms, max_text_length) = {
+                        let (trigger_window_ms, max_text_length, sanitization_config) = {
                             let config_state = ctx
                                 .app
                                 .state::<std::sync::Mutex<crate::config::AppConfig>>();
-                            let config = config_state.lock().unwrap();
+                            let config = crate::lock_or_recover!(config_state);
                             (
                                 config.trigger.double_copy_window_ms,
                                 config.trigger.max_text_length,
+                                config.sanitization.clone(),
                             )
                         };
 
                         if ctx.state.on_change(&text, trigger_window_ms) {
                             log::info!("[Clipboard] Double-copy detected");
 
-                            let sanitized_text = {
-                                let config_state = ctx
-                                    .app
-                                    .state::<std::sync::Mutex<crate::config::AppConfig>>();
-                                let config = config_state.lock().unwrap();
-                                let sanitization_config = config.sanitization.clone();
-                                if sanitization_config.enabled {
-                                    crate::sanitize::sanitize_text(&text, &sanitization_config)
-                                } else {
-                                    text.clone()
-                                }
+                            let sanitized_text = if sanitization_config.enabled {
+                                crate::sanitize::sanitize_text(&text, &sanitization_config)
+                            } else {
+                                text.clone()
                             };
 
                             let final_char_count: usize = sanitized_text.chars().count();
@@ -327,15 +367,13 @@ unsafe extern "system" fn clipboard_wndproc(
                                 };
 
                             log::debug!(
-                                "[Clipboard] Emitting speak-request ({} chars)",
+                                "[Clipboard] Dispatching synthesis ({} chars)",
                                 final_text.chars().count()
                             );
 
-                            // Emit the full text — the frontend will call speak_queued,
-                            // which handles pagination and sequential fragment playback.
-                            let _ = ctx
-                                .app
-                                .emit("speak-request", SpeakRequest { text: final_text });
+                            // Dispatch speak_queued natively — it handles
+                            // pagination and sequential fragment playback.
+                            spawn_speak_queued(&ctx.app, final_text);
                         } else {
                             if crate::logging::is_debug_mode() {
                                 log::debug!(
@@ -374,6 +412,7 @@ pub fn run_clipboard_listener(app: AppHandle, is_listening: Arc<AtomicBool>) {
             app: app.clone(),
             is_listening,
             state: ClipboardState::new(),
+            last_change_emit: None,
         });
     });
 
@@ -413,9 +452,9 @@ pub fn run_clipboard_listener(app: AppHandle, is_listening: Arc<AtomicBool>) {
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            HWND_MESSAGE, // Message-only window
+            Some(HWND_MESSAGE), // Message-only window
             None,
-            hinstance,
+            Some(HINSTANCE(hinstance.0)),
             None,
         ) {
             Ok(h) => h,

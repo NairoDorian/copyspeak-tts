@@ -39,7 +39,7 @@ impl Default for MarkdownSanitizationConfig {
             enabled: true,
             strip_headers: true,
             strip_code_blocks: true,
-            strip_inline_code: false,
+            strip_inline_code: true,
             strip_links: true,
             strip_bold_italic: true,
             strip_lists: true,
@@ -77,5 +77,19 @@ impl Default for PaginationConfig {
             enabled: true,
             fragment_size: 500,
         }
+    }
+}
+
+impl PaginationConfig {
+    pub fn validate(&self) -> Vec<crate::config::ValidationError> {
+        let mut errors = Vec::new();
+        if self.fragment_size < 50 || self.fragment_size > 5000 {
+            errors.push(crate::config::ValidationError::FragmentSizeOutOfRange {
+                value: self.fragment_size,
+                min: 50,
+                max: 5000,
+            });
+        }
+        errors
     }
 }

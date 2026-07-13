@@ -49,7 +49,7 @@ static MINUTE_COUNTER: OnceLock<Mutex<(String, u32)>> = OnceLock::new();
 /// Thread-safe; resets to 1 when the minute key changes.
 pub fn get_and_increment_minute_counter(minute_key: &str) -> u32 {
     let mutex = MINUTE_COUNTER.get_or_init(|| Mutex::new((String::new(), 0)));
-    let mut state = mutex.lock().unwrap();
+    let mut state = crate::lock_or_recover!(mutex);
     if state.0 != minute_key {
         *state = (minute_key.to_string(), 1);
     } else {
@@ -74,6 +74,7 @@ pub enum ValidationError {
     HudWidthTooSmall { value: u32, min: u32 },
     HudHeightTooSmall { value: u32, min: u32 },
     HotkeyInvalid { message: String },
+    FragmentSizeOutOfRange { value: u32, min: u32, max: u32 },
 }
 
 impl std::fmt::Display for ValidationError {
@@ -155,6 +156,13 @@ impl std::fmt::Display for ValidationError {
             ValidationError::HotkeyInvalid { message } => {
                 write!(f, "Hotkey configuration invalid: {}", message)
             }
+            ValidationError::FragmentSizeOutOfRange { value, min, max } => {
+                write!(
+                    f,
+                    "Pagination fragment size {} out of range [{}, {}]",
+                    value, min, max
+                )
+            }
         }
     }
 }
@@ -201,6 +209,7 @@ impl Default for AppConfig {
                 appearance: AppearanceMode::default(),
                 update_checks_enabled: true,
                 locale: "en".to_string(),
+                control_token: None,
             },
             trigger: TriggerConfig {
                 listen_enabled: true,
@@ -240,6 +249,7 @@ impl AppConfig {
         errors.extend(self.tts.validate());
         errors.extend(self.hud.validate());
         errors.extend(self.history.validate());
+        errors.extend(self.pagination.validate());
 
         if let Err(e) = self.hotkey.validate() {
             errors.push(ValidationError::HotkeyInvalid { message: e });
@@ -318,12 +328,16 @@ pub fn load_or_default() -> AppConfig {
 }
 
 /// Save config to disk. Creates parent directory if needed.
+/// Write-then-rename so a crash mid-write can't truncate the file (the loader
+/// silently falls back to defaults, losing settings including API keys).
 pub fn save(config: &AppConfig) -> Result<(), String> {
     let path = config_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create config dir: {e}"))?;
     }
     let json = serde_json::to_string_pretty(config).map_err(|e| format!("Serialize error: {e}"))?;
-    std::fs::write(&path, json).map_err(|e| format!("Write error: {e}"))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json).map_err(|e| format!("Write error: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("Rename error: {e}"))?;
     Ok(())
 }

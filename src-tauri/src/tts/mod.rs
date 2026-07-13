@@ -3,19 +3,20 @@
 // The app doesn't care how speech is synthesized — only that it gets audio bytes back.
 
 pub mod cartesia;
-pub mod catalog;
 pub mod cli;
-pub mod edge;
 pub mod elevenlabs;
-pub mod google;
-pub mod http;
-pub mod microsoft;
+pub mod local_tts_server;
 pub mod openai;
+pub mod piper_server;
+pub mod catalog;
+pub mod http;
+pub mod google;
+pub mod microsoft;
+pub mod edge;
 
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-#[allow(dead_code)]
 pub enum TtsError {
     #[error("TTS command failed: {0}")]
     CommandFailed(String),
@@ -27,10 +28,14 @@ pub enum TtsError {
     Io(#[from] std::io::Error),
 
     #[error("TTS engine not available: {0}")]
+    #[allow(dead_code)]
     Unavailable(String),
 
     #[error("HTTP error: {0}")]
     Http(String),
+
+    #[error("Piper server error: {0}")]
+    Server(String),
 }
 
 /// Metadata for a voice option exposed in the settings UI.
@@ -52,11 +57,7 @@ pub trait TtsBackend: Send + Sync {
 
     /// Synthesize text into WAV audio bytes.
     /// Blocks until synthesis is complete (called from async context via spawn_blocking).
-    ///
-    /// Speed is intentionally NOT a parameter: playback speed is a frontend-only
-    /// concern (applied via `audioEl.playbackRate`), mirroring how pitch is handled.
-    /// Synthesis always runs at native speed; saved files do not bake in speed.
-    fn synthesize(&self, text: &str, voice: &str) -> Result<Vec<u8>, TtsError>;
+    fn synthesize(&self, text: &str, voice: &str, speed: f32) -> Result<Vec<u8>, TtsError>;
 
     /// Check if the engine binary/server is reachable.
     fn health_check(&self) -> Result<(), TtsError>;

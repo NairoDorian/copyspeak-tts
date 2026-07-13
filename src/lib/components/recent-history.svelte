@@ -18,8 +18,11 @@
     Clock,
     ChevronDown,
     ChevronUp,
-    ChevronRight
+    ChevronRight,
+    Square,
+    CheckSquare
   } from "@lucide/svelte";
+  import HistoryBulkActions from "$lib/components/history/history-bulk-actions.svelte";
   import { historyStore } from "$lib/stores/history-store.svelte.js";
   import type { HistoryItem } from "$lib/types";
   import { _ } from "svelte-i18n";
@@ -35,8 +38,10 @@
   let actionInProgress = $state<string | null>(null);
   let itemToDelete = $state<HistoryItem | null>(null);
   let batchToDelete = $state<string | null>(null);
+  let deleteAllConfirm = $state(false);
   let expandedItems = $state<Set<string>>(new Set());
   let expandedBatches = $state<Set<string>>(new Set());
+  let selectedIds = $state<Set<string>>(new Set());
 
   function toggleExpand(itemId: string) {
     if (expandedItems.has(itemId)) {
@@ -73,8 +78,10 @@
     totalFragments: number;
   }
 
-  // Get recent items sorted descending by timestamp, grouped by batch_id
-  const recentGrouped = $derived(() => {
+  // Get recent items sorted descending by timestamp, grouped by batch_id.
+  // $derived.by memoizes the value — $derived(() => ...) stored a function
+  // that re-ran the full sort+group on every call site.
+  const recentGrouped = $derived.by(() => {
     const sortedItems = [...historyStore.items].sort((a, b) => b.timestamp - a.timestamp);
     const seenBatchIds = new Set<string>();
     const result: Array<GroupedItem | GroupedBatch> = [];
@@ -200,6 +207,89 @@
     return null;
   }
 
+  function toggleSelect(itemId: string) {
+    const next = new Set(selectedIds);
+    if (next.has(itemId)) {
+      next.delete(itemId);
+    } else {
+      next.add(itemId);
+    }
+    selectedIds = next;
+  }
+
+  function selectAllVisible() {
+    const ids = new Set<string>();
+    for (const g of recentGrouped) {
+      if (g.type === "single") {
+        ids.add(g.item.id);
+      } else {
+        for (const f of g.items) ids.add(f.id);
+      }
+    }
+    selectedIds = ids;
+  }
+
+  function clearSelection() {
+    selectedIds = new Set();
+  }
+
+  async function deleteSelected() {
+    actionInProgress = "bulk-delete";
+    try {
+      await historyStore.deleteItems([...selectedIds]);
+      selectedIds = new Set();
+      onSuccess?.("Deleted selected items from history");
+    } catch (e) {
+      onError?.(`Failed to delete selected: ${e}`);
+    } finally {
+      actionInProgress = null;
+    }
+  }
+
+  async function deleteAllHistory() {
+    actionInProgress = "delete-all";
+    deleteAllConfirm = false;
+    try {
+      await historyStore.clearAll();
+      selectedIds = new Set();
+      onSuccess?.("All history cleared");
+    } catch (e) {
+      onError?.(`Failed to clear history: ${e}`);
+    } finally {
+      actionInProgress = null;
+    }
+  }
+
+  async function exportSelected() {
+    actionInProgress = "export";
+    try {
+      const { exportSelectedItemsToHtml } = await import("$lib/utils/html-export");
+      const selectedItems = historyStore.items.filter((i) => selectedIds.has(i.id));
+      await exportSelectedItemsToHtml(selectedItems);
+      onSuccess?.("Exported selected items");
+    } catch (e) {
+      onError?.(`Failed to export: ${e}`);
+    } finally {
+      actionInProgress = null;
+    }
+  }
+
+  let allSelectedVisible = $derived.by(() => {
+    const all = recentGrouped;
+    if (all.length === 0) return false;
+    for (const g of all) {
+      if (g.type === "single" && !selectedIds.has(g.item.id)) return false;
+      if (g.type === "batch") {
+        for (const f of g.items) {
+          if (!selectedIds.has(f.id)) return false;
+        }
+      }
+    }
+    return true;
+  });
+
+  let someSelectedVisible = $derived(selectedIds.size > 0);
+
   function formatSynthesisDuration(ms: number): string {
     if (ms < 1000) return `${ms}ms`;
     const seconds = ms / 1000;
@@ -228,16 +318,44 @@
       <Clock class="h-4 w-4" />
       {$_("history.title")}
     </h2>
-    {#if historyStore.isLoading}
-      <span class="text-muted-foreground text-xs">{$_("history.loading")}</span>
-    {/if}
+    <div class="flex items-center gap-2">
+      {#if historyStore.isLoading}
+        <span class="text-muted-foreground text-xs">{$_("history.loading")}</span>
+      {/if}
+      {#if historyStore.items.length > 0}
+        <Button
+          variant="ghost"
+          size="sm"
+          class="h-7 px-2 text-xs text-destructive hover:text-destructive"
+          onclick={() => (deleteAllConfirm = true)}
+          disabled={actionInProgress !== null}
+        >
+          <Trash2 class="mr-1 h-3 w-3" />
+          {$_("history.clearAll")}
+        </Button>
+      {/if}
+    </div>
   </div>
 
-  {#if recentGrouped().length === 0}
+  {#if someSelectedVisible}
+    <HistoryBulkActions
+      totalItems={historyStore.items.length}
+      selectedCount={selectedIds.size}
+      isAllSelected={allSelectedVisible}
+      isSomeSelected={someSelectedVisible}
+      onSelectAll={selectAllVisible}
+      onClearSelection={clearSelection}
+      onDeleteSelected={deleteSelected}
+      onExportSelected={exportSelected}
+      disabled={actionInProgress !== null}
+    />
+  {/if}
+
+  {#if recentGrouped.length === 0}
     <p class="text-muted-foreground py-4 text-center text-sm italic">{$_("history.empty")}</p>
   {:else}
     <div class="space-y-2">
-      {#each recentGrouped() as grouped (grouped.type === "batch" ? grouped.batchId : grouped.item.id)}
+      {#each recentGrouped as grouped (grouped.type === "batch" ? grouped.batchId : grouped.item.id)}
         {#if grouped.type === "single"}
           {@const item = grouped.item}
           <div
@@ -246,9 +364,21 @@
             <div
               class="bg-muted/30 border-border/50 flex items-center justify-between gap-2 border-b px-3 py-2"
             >
-              <div
-                class="text-muted-foreground flex min-w-0 items-center gap-1.5 overflow-hidden text-xs"
-              >
+              <div class="flex items-center gap-1.5 min-w-0">
+                <button
+                  type="button"
+                  class="shrink-0 text-muted-foreground hover:text-foreground"
+                  onclick={() => toggleSelect(item.id)}
+                >
+                  {#if selectedIds.has(item.id)}
+                    <CheckSquare class="h-3.5 w-3.5" />
+                  {:else}
+                    <Square class="h-3.5 w-3.5" />
+                  {/if}
+                </button>
+                <div
+                  class="text-muted-foreground flex min-w-0 items-center gap-1.5 overflow-hidden text-xs"
+                >
                 <span
                   class="h-1.5 w-1.5 shrink-0 rounded-full {item.success
                     ? 'bg-green-500'
@@ -257,6 +387,7 @@
                 <span class="text-foreground shrink-0 font-medium">
                   {item.output_path ? item.output_path.split(/[/\\]/).pop() : item.tts_engine}
                 </span>
+                </div>
               </div>
               <div class="flex shrink-0 items-center gap-0.5">
                 {#if getSynthesisMs(item)}
@@ -329,6 +460,31 @@
               onclick={() => toggleBatchExpand(batch.batchId)}
             >
               <div class="flex min-w-0 items-center gap-1.5">
+                <span
+                  role="checkbox"
+                  aria-checked={batch.items.every((f: HistoryItem) => selectedIds.has(f.id)) ? "true" : batch.items.some((f: HistoryItem) => selectedIds.has(f.id)) ? "mixed" : "false"}
+                  tabindex="0"
+                  class="shrink-0 text-muted-foreground hover:text-foreground cursor-pointer"
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    const allSelected = batch.items.every((f: HistoryItem) => selectedIds.has(f.id));
+                    const next = new Set(selectedIds);
+                    for (const f of batch.items) {
+                      if (allSelected) next.delete(f.id);
+                      else next.add(f.id);
+                    }
+                    selectedIds = next;
+                  }}
+                  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); } }}
+                >
+                  {#if batch.items.every((f: HistoryItem) => selectedIds.has(f.id))}
+                    <CheckSquare class="h-3.5 w-3.5" />
+                  {:else if batch.items.some((f: HistoryItem) => selectedIds.has(f.id))}
+                    <Square class="h-3.5 w-3.5 opacity-70" />
+                  {:else}
+                    <Square class="h-3.5 w-3.5" />
+                  {/if}
+                </span>
                 <ChevronRight
                   class="h-3 w-3 shrink-0 transition-transform {expandedBatches.has(batch.batchId)
                     ? 'rotate-90'
@@ -399,6 +555,20 @@
                       class="hover:bg-accent/10 border-border/30 flex items-center justify-between gap-2 border-b px-3 py-1.5 last:border-b-0"
                     >
                       <div class="flex min-w-0 flex-1 items-center gap-1.5">
+                        <button
+                          type="button"
+                          class="shrink-0 text-muted-foreground hover:text-foreground"
+                          onclick={(e) => {
+                            e.stopPropagation();
+                            toggleSelect(fragment.id);
+                          }}
+                        >
+                          {#if selectedIds.has(fragment.id)}
+                            <CheckSquare class="h-3 w-3" />
+                          {:else}
+                            <Square class="h-3 w-3" />
+                          {/if}
+                        </button>
                         {#if batchInfo}
                           <Badge variant="outline" class="h-4 shrink-0 px-1 text-[9px]">
                             {batchInfo.position}/{batchInfo.total}
@@ -475,6 +645,26 @@
     <AlertDialogFooter>
       <AlertDialogCancel>{$_("history.cancel")}</AlertDialogCancel>
       <AlertDialogAction onclick={confirmDelete}>{$_("history.confirmDelete")}</AlertDialogAction>
+    </AlertDialogFooter>
+  </AlertDialogContent>
+</AlertDialog>
+
+<AlertDialog
+  open={deleteAllConfirm}
+  onOpenChange={(open) => {
+    if (!open) deleteAllConfirm = false;
+  }}
+>
+  <AlertDialogContent>
+    <AlertDialogHeader>
+      <AlertDialogTitle>{$_("history.clearAllDialogTitle")}</AlertDialogTitle>
+      <AlertDialogDescription>
+        {$_("history.clearAllDescription")}
+      </AlertDialogDescription>
+    </AlertDialogHeader>
+    <AlertDialogFooter>
+      <AlertDialogCancel>{$_("history.cancel")}</AlertDialogCancel>
+      <AlertDialogAction onclick={deleteAllHistory}>{$_("history.confirmClearAll")}</AlertDialogAction>
     </AlertDialogFooter>
   </AlertDialogContent>
 </AlertDialog>

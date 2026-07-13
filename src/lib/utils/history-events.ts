@@ -4,7 +4,6 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import { historyStore } from "$lib/stores/history-store.svelte";
 
 let unlistenHistory: UnlistenFn | null = null;
-let unlistenSpeak: UnlistenFn | null = null;
 let isListening = false;
 
 export async function startHistoryEventListeners(): Promise<void> {
@@ -19,14 +18,11 @@ export async function startHistoryEventListeners(): Promise<void> {
   try {
     const { listen } = await import("@tauri-apps/api/event");
 
+    // Every history write emits "history-updated" — refreshing on
+    // speak-request as well was a wasted full-history IPC dump inside the
+    // copy-to-first-audio window.
     unlistenHistory = await listen<void>("history-updated", async () => {
       await historyStore.refresh();
-    });
-
-    unlistenSpeak = await listen<{ text: string }>("speak-request", async () => {
-      setTimeout(async () => {
-        await historyStore.refresh();
-      }, 100);
     });
 
     isListening = true;
@@ -39,10 +35,6 @@ export async function stopHistoryEventListeners(): Promise<void> {
   if (unlistenHistory) {
     unlistenHistory();
     unlistenHistory = null;
-  }
-  if (unlistenSpeak) {
-    unlistenSpeak();
-    unlistenSpeak = null;
   }
   isListening = false;
 }

@@ -9,6 +9,10 @@ export interface QueuedFragment {
   index: number;
   total: number;
   text: string;
+  /** Whether this is the last fragment of the stream (undefined = final) */
+  isFinal?: boolean;
+  /** Pre-decoded audio buffer (filled by PlaybackStore for instant playback) */
+  decodedBuffer?: AudioBuffer;
 }
 
 export interface FragmentQueueHandlers {
@@ -19,6 +23,7 @@ export interface FragmentQueueHandlers {
 export class FragmentQueue {
   private _queue: QueuedFragment[] = [];
   private _isProcessing = false;
+  private _awaitingNext = false;
   private _handlers: FragmentQueueHandlers;
 
   constructor(handlers: FragmentQueueHandlers) {
@@ -30,6 +35,11 @@ export class FragmentQueue {
    */
   enqueue(fragment: QueuedFragment): void {
     this._queue.push(fragment);
+    // Playback drained the queue before the stream finished — resume now.
+    if (this._awaitingNext) {
+      this._awaitingNext = false;
+      void this.processNext();
+    }
   }
 
   /**
@@ -89,13 +99,16 @@ export class FragmentQueue {
    */
   handleFragmentEnded(): void {
     // Remove the just-completed fragment from queue
-    if (this._queue.length > 0) {
-      this._queue.shift();
-    }
+    const ended = this._queue.shift();
 
     if (this._queue.length > 0) {
       // Auto-advance to next fragment
       this.processNext();
+    } else if (ended && ended.isFinal === false) {
+      // The stream isn't finished — synthesis is running behind playback.
+      // Declaring completion here would stop the HUD/analyser mid-utterance;
+      // stay in processing mode and resume when the next fragment arrives.
+      this._awaitingNext = true;
     } else {
       // No more fragments - playback complete
       this._isProcessing = false;
@@ -109,6 +122,7 @@ export class FragmentQueue {
   clear(): void {
     this._queue = [];
     this._isProcessing = false;
+    this._awaitingNext = false;
   }
 
   /**

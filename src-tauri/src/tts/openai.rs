@@ -3,13 +3,33 @@ use crate::config::OpenAIConfig;
 use reqwest::Client;
 use serde_json::json;
 
+fn get_openai_client() -> &'static Client {
+    static CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            .pool_max_idle_per_host(2)
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .tcp_nodelay(true)
+            .tcp_keepalive(std::time::Duration::from_secs(60))
+            // Bounded deadlines — a hung request must not hold the global
+            // synthesis lock forever.
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .expect("Failed to create OpenAI HTTP client")
+    })
+}
+
 pub struct OpenAiTtsBackend {
     config: OpenAIConfig,
+    client: Client,
+    auth_header: String,
 }
 
 impl OpenAiTtsBackend {
     pub fn new(config: OpenAIConfig) -> Self {
-        Self { config }
+        let auth_header = format!("Bearer {}", config.api_key);
+        Self { config, client: get_openai_client().clone(), auth_header }
     }
 
     /// Execute an async block using the current Tokio runtime if available,
@@ -38,7 +58,7 @@ impl TtsBackend for OpenAiTtsBackend {
         "OpenAI"
     }
 
-    fn synthesize(&self, text: &str, voice: &str) -> Result<Vec<u8>, TtsError> {
+    fn synthesize(&self, text: &str, voice: &str, _speed: f32) -> Result<Vec<u8>, TtsError> {
         let url = "https://api.openai.com/v1/audio/speech";
 
         let mut body = json!({
@@ -56,7 +76,7 @@ impl TtsBackend for OpenAiTtsBackend {
             body["instructions"] = json!(instructions);
         }
 
-        let api_key = crate::secrets::resolve(&self.config.api_key, &["OPENAI_API_KEY"]);
+        let auth_header = self.auth_header.clone();
 
         // Log request details
         log::info!(
@@ -75,16 +95,18 @@ impl TtsBackend for OpenAiTtsBackend {
 
         let start_time = std::time::Instant::now();
 
-        let response = Self::block_on_async(async {
-            let client = Client::new();
+        let response = {
+            let client = self.client.clone();
+            Self::block_on_async(async move {
             client
                 .post(url)
-                .header("Authorization", format!("Bearer {}", api_key))
+                .header("Authorization", auth_header)
                 .header("Content-Type", "application/json")
                 .json(&body)
                 .send()
                 .await
-        })
+            })
+        }
         .map_err(|e| {
             let elapsed = start_time.elapsed();
             log::error!("OpenAI TTS request failed after {:?}: {}", elapsed, e);

@@ -4,3 +4,4 @@
 
 export { historyStore } from "./history-store.svelte";
 export { listeningStore } from "./listening-store.svelte";
+export { piperStore } from "./piper-store.svelte";

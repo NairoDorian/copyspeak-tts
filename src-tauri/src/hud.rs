@@ -9,7 +9,7 @@
 // the HUD component registers handlers for `hud:*` events.
 
 use crate::audio::AmplitudeEnvelope;
-use crate::commands::helpers::{engine_identifier, resolve_effective};
+use crate::commands::helpers::resolve_effective;
 use crate::config::{AppConfig, HudConfig, HudPosition, HudPresetPosition, TtsEngine};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Monitor, PhysicalPosition, WebviewWindow};
@@ -30,33 +30,86 @@ pub struct HudSynthesizingPayload {
     pub duration_ms: Option<u64>,
 }
 
-fn title_case(value: &str) -> String {
-    let mut chars = value.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-    }
-}
-
 fn get_provider_voice(cfg: &AppConfig) -> (Option<String>, Option<String>) {
+    // Resolve the active profile rather than reading the legacy `active_backend`
+    // mirror / `preset` field, which are empty for profile-based configs.
     let eff = resolve_effective(&cfg.tts);
+    let local_preset = eff
+        .engine_options
+        .local()
+        .and_then(|o| o.preset.clone())
+        .unwrap_or_default();
+
     let provider = match eff.engine {
-        TtsEngine::Local => match engine_identifier(&eff.engine, &cfg.tts).as_str() {
-            "piper" => "Piper".to_string(),
-            "kokoro" => "Kokoro".to_string(),
-            "pocket" => "Pocket".to_string(),
-            _ => "Local".to_string(),
-        },
+        TtsEngine::Local => match local_preset.as_str() {
+            "piper" => "Piper",
+            "kokoro-tts" => "Kokoro",
+            "pocket-tts" => "Pocket",
+            _ => "Local",
+        }
+        .to_string(),
         TtsEngine::OpenAI => "OpenAI".to_string(),
         TtsEngine::ElevenLabs => "ElevenLabs".to_string(),
         TtsEngine::Cartesia => "Cartesia".to_string(),
         TtsEngine::Http => "HTTP".to_string(),
         TtsEngine::Google => "Google".to_string(),
         TtsEngine::Microsoft => "Microsoft".to_string(),
-        TtsEngine::Edge => "Edge-TTS".to_string(),
+        TtsEngine::Edge => "Edge".to_string(),
     };
-    let voice = eff.voice_label.unwrap_or_else(|| title_case(&eff.voice));
+
+    let voice_id = eff.voice.clone();
+    let voice = match eff.engine {
+        TtsEngine::Local => match local_preset.as_str() {
+            "kokoro-tts" => voice_id
+                .split('_')
+                .nth(1)
+                .map(|s| {
+                    let mut chars = s.chars();
+                    match chars.next() {
+                        None => String::new(),
+                        Some(first) => {
+                            first.to_uppercase().collect::<String>() + chars.as_str()
+                        }
+                    }
+                })
+                .unwrap_or_else(|| voice_id.clone()),
+            _ => voice_id,
+        },
+        TtsEngine::OpenAI => {
+            let mut chars = voice_id.chars();
+            match chars.next() {
+                None => voice_id,
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        }
+        TtsEngine::ElevenLabs => {
+            let voice_name = eff
+                .voice_label
+                .clone()
+                .unwrap_or_else(|| {
+                    crate::tts::elevenlabs::ElevenLabsTtsBackend::resolve_voice_name_static(
+                        &voice_id,
+                    )
+                });
+            let mut chars = voice_name.chars();
+            match chars.next() {
+                None => voice_name,
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        }
+        TtsEngine::Cartesia => eff.voice_label.clone().unwrap_or_else(|| "Katie".to_string()),
+        TtsEngine::Http => voice_id,
+        TtsEngine::Google => voice_id,
+        TtsEngine::Microsoft => voice_id,
+        TtsEngine::Edge => voice_id,
+    };
     (Some(provider), Some(voice))
+}
+
+// ponytail: HUD stays visible always; "hidden" = parked off-screen. Avoids the WebView2
+// transparent-window hidden→visible repaint bug; show_* repositions on-screen.
+pub fn move_hud_offscreen(window: &WebviewWindow) {
+    let _ = window.set_position(PhysicalPosition::new(-10_000, -10_000));
 }
 
 #[derive(Clone, Serialize)]
@@ -78,12 +131,12 @@ pub struct HudPlaybackStartPayload {
     pub audio_duration_ms: Option<u64>,
 }
 
-pub fn get_available_monitors(app: &AppHandle) -> Vec<MonitorInfo> {
-    let primary_monitor = app.primary_monitor().ok().flatten();
+pub fn get_available_monitors(window: &WebviewWindow) -> Vec<MonitorInfo> {
+    let primary_monitor = window.primary_monitor().ok().flatten();
 
     let primary_name = primary_monitor.as_ref().and_then(|m| m.name().cloned());
 
-    match app.available_monitors() {
+    match window.available_monitors() {
         Ok(monitors) => monitors
             .into_iter()
             .map(|m| monitor_to_info(&m, &primary_name))
@@ -115,8 +168,8 @@ fn monitor_to_info(monitor: &Monitor, primary_name: &Option<String>) -> MonitorI
 }
 
 /// Position the HUD window according to config.
-pub fn position_hud_window(app: &AppHandle, hud_window: &WebviewWindow, config: &HudConfig) {
-    let available_monitors = get_available_monitors(app);
+pub fn position_hud_window(hud_window: &WebviewWindow, config: &HudConfig) {
+    let available_monitors = get_available_monitors(hud_window);
 
     let target_monitor = available_monitors
         .iter()
@@ -147,27 +200,19 @@ pub fn position_hud_window(app: &AppHandle, hud_window: &WebviewWindow, config: 
         monitor_size,
         monitor_offset,
     ) {
-        log::info!("[HUD] positioning to ({}, {})", position.x, position.y);
+        log::debug!("Setting HUD position to ({}, {})", position.x, position.y);
         if let Err(e) = hud_window.set_position(position) {
             log::error!("Failed to set HUD position: {}", e);
-        } else if let Ok(actual) = hud_window.outer_position() {
-            log::info!("[HUD] actual outer position: ({}, {})", actual.x, actual.y);
         }
     } else {
         log::warn!("Failed to compute HUD position, using default");
     }
 }
 
-// ponytail: HUD stays visible always; "hidden" = parked off-screen. Avoids the WebView2
-// transparent-window hidden→visible repaint bug; show_* repositions on-screen.
-pub fn move_hud_offscreen(window: &WebviewWindow) {
-    let _ = window.set_position(PhysicalPosition::new(-10_000, -10_000));
-}
-
 pub fn show_hud(app: &AppHandle, envelope: AmplitudeEnvelope, text: Option<String>) {
     let (config, provider, voice) = {
         let state = app.state::<std::sync::Mutex<AppConfig>>();
-        let cfg = state.lock().unwrap();
+        let cfg = crate::lock_or_recover!(state);
         let (p, v) = get_provider_voice(&cfg);
         (cfg.hud.clone(), p, v)
     };
@@ -180,44 +225,28 @@ pub fn show_hud(app: &AppHandle, envelope: AmplitudeEnvelope, text: Option<Strin
     log::info!("Showing HUD for playback");
 
     if let Some(window) = app.get_webview_window("hud") {
-        position_hud_window(app, &window, &config);
-        let _ = window.set_ignore_cursor_events(true);
+        if let Err(e) = window.show() {
+            log::error!("Failed to show HUD window: {}", e);
+        }
     } else {
         log::warn!("HUD window not found");
     }
 
-    // Spawn a thread so we don't block the caller (possibly on Tokio runtime).
-    let app_clone = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-
-        log::info!("Emitting hud:start event to hud window");
-        log::debug!(
-            "[HUD] Event payload: envelope values={}, text={:?}",
-            envelope.values.len(),
-            text
-        );
-
-        if let Err(e) = app_clone.emit(
-            "hud:start",
-            HudStartPayload {
-                envelope,
-                text,
-                provider,
-                voice,
-            },
-        ) {
-            log::error!("Failed to emit hud:start event: {}", e);
-        } else {
-            log::info!("hud:start emitted");
-        }
-    });
+    let payload = HudStartPayload {
+        envelope,
+        text,
+        provider,
+        voice,
+    };
+    if let Err(e) = app.emit("hud:start", payload) {
+        log::error!("Failed to emit hud:start event: {}", e);
+    }
 }
 
 pub fn show_hud_synthesizing(app: &AppHandle, text: Option<String>) {
     let (config, provider, voice) = {
         let state = app.state::<std::sync::Mutex<AppConfig>>();
-        let cfg = state.lock().unwrap();
+        let cfg = crate::lock_or_recover!(state);
         let (p, v) = get_provider_voice(&cfg);
         (cfg.hud.clone(), p, v)
     };
@@ -230,31 +259,22 @@ pub fn show_hud_synthesizing(app: &AppHandle, text: Option<String>) {
     log::info!("Showing HUD for synthesizing");
 
     if let Some(window) = app.get_webview_window("hud") {
-        position_hud_window(app, &window, &config);
-        let _ = window.set_ignore_cursor_events(true);
+        if let Err(e) = window.show() {
+            log::error!("Failed to show HUD window: {}", e);
+        }
     } else {
         log::warn!("HUD window not found");
     }
 
-    let app_clone = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-
-        log::info!("Emitting hud:synthesizing event (global)");
-        if let Err(e) = app_clone.emit(
-            "hud:synthesizing",
-            HudSynthesizingPayload {
-                text,
-                provider,
-                voice,
-                duration_ms: None,
-            },
-        ) {
-            log::error!("Failed to emit hud:synthesizing event: {}", e);
-        } else {
-            log::info!("hud:synthesizing emitted");
-        }
-    });
+    let payload = HudSynthesizingPayload {
+        text,
+        provider,
+        voice,
+        duration_ms: None,
+    };
+    if let Err(e) = app.emit("hud:synthesizing", payload) {
+        log::error!("Failed to emit hud:synthesizing event: {}", e);
+    }
 }
 
 /// Show HUD for playback of existing audio file.
@@ -262,7 +282,7 @@ pub fn show_hud_synthesizing(app: &AppHandle, text: Option<String>) {
 pub fn show_hud_playback(app: &AppHandle, text: Option<String>, audio_duration_ms: Option<u64>) {
     let (config, provider, voice) = {
         let state = app.state::<std::sync::Mutex<AppConfig>>();
-        let cfg = state.lock().unwrap();
+        let cfg = crate::lock_or_recover!(state);
         let (p, v) = get_provider_voice(&cfg);
         (cfg.hud.clone(), p, v)
     };
@@ -275,31 +295,22 @@ pub fn show_hud_playback(app: &AppHandle, text: Option<String>, audio_duration_m
     log::info!("Showing HUD for playback");
 
     if let Some(window) = app.get_webview_window("hud") {
-        position_hud_window(app, &window, &config);
-        let _ = window.set_ignore_cursor_events(true);
+        if let Err(e) = window.show() {
+            log::error!("Failed to show HUD window: {}", e);
+        }
     } else {
         log::warn!("HUD window not found");
     }
 
-    let app_clone = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-
-        log::info!("Emitting hud:playback_start event (global)");
-        if let Err(e) = app_clone.emit(
-            "hud:playback_start",
-            HudPlaybackStartPayload {
-                text,
-                provider,
-                voice,
-                audio_duration_ms,
-            },
-        ) {
-            log::error!("Failed to emit hud:playback_start event: {}", e);
-        } else {
-            log::info!("hud:playback_start emitted");
-        }
-    });
+    let payload = HudPlaybackStartPayload {
+        text,
+        provider,
+        voice,
+        audio_duration_ms,
+    };
+    if let Err(e) = app.emit("hud:playback_start", payload) {
+        log::error!("Failed to emit hud:playback_start event: {}", e);
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -320,6 +331,7 @@ pub struct SynthesisProgressPayload {
     pub processed_chars: usize,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn emit_synthesis_progress(
     app: &AppHandle,
     estimated_total_ms: Option<u64>,
@@ -334,7 +346,7 @@ pub fn emit_synthesis_progress(
 ) {
     let config = {
         let state = app.state::<std::sync::Mutex<AppConfig>>();
-        let cfg = state.lock().unwrap();
+        let cfg = crate::lock_or_recover!(state);
         cfg.hud.clone()
     };
 
@@ -362,7 +374,7 @@ pub fn emit_synthesis_progress(
 pub fn show_hud_clipboard_copied(app: &AppHandle, trigger_window_ms: u64) {
     let config = {
         let state = app.state::<std::sync::Mutex<AppConfig>>();
-        let cfg = state.lock().unwrap();
+        let cfg = crate::lock_or_recover!(state);
         cfg.hud.clone()
     };
 
@@ -370,9 +382,11 @@ pub fn show_hud_clipboard_copied(app: &AppHandle, trigger_window_ms: u64) {
         return;
     }
 
+    // Show window before emitting event
     if let Some(window) = app.get_webview_window("hud") {
-        position_hud_window(app, &window, &config);
-        let _ = window.set_ignore_cursor_events(true);
+        if let Err(e) = window.show() {
+            log::error!("Failed to show HUD window: {}", e);
+        }
     } else {
         log::warn!("HUD window not found");
     }
@@ -389,8 +403,11 @@ pub fn hide_hud(app: &AppHandle) {
     log::debug!("Hiding HUD");
     let _ = app.emit("hud:stop", ());
 
+    // Hide the window
     if let Some(window) = app.get_webview_window("hud") {
-        move_hud_offscreen(&window);
+        if let Err(e) = window.hide() {
+            log::error!("Failed to hide HUD window: {}", e);
+        }
     }
 }
 
@@ -442,5 +459,3 @@ fn compute_hud_position(
 
     Some(PhysicalPosition::new(x, y))
 }
-
-

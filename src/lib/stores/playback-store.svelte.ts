@@ -21,7 +21,7 @@ import { getEffect } from "./playback/effects/registry.js";
 import { FragmentQueue, type QueuedFragment } from "./playback/fragment-queue.js";
 import { hudStore } from "./hud-store.svelte.js";
 
-const WINDOWS_AUDIO_PREROLL_MS = 1200;
+const WINDOWS_AUDIO_PREROLL_MS = 200;
 
 class PlaybackStore {
   isPlaying = $state(false);
@@ -39,17 +39,29 @@ class PlaybackStore {
   volume = $state(100);
   speed = $state(1.0);
   activeEffect = $state<EffectId>("none");
+  // Synced from config.hud.enabled (+layout); gates the 60fps amplitude loop
+  hudEnabled = $state(true);
 
   private _audioEl: HTMLAudioElement | null = null;
   private _audioCtx: AudioContext | null = null;
   private _decodedBuffer: AudioBuffer | null = null;
   private _originalBytes: ArrayBuffer | null = null;
-  private _cachedPitchUrl: { ratio: number; effectId: EffectId; url: string } | null = null;
+  private _cachedPitchUrl: {
+    ratio: number;
+    effectId: EffectId;
+    preroll: boolean;
+    url: string;
+  } | null = null;
   private _unlistenFns: Array<() => void> = [];
   private _emit: ((name: string, payload: unknown) => Promise<void>) | null = null;
   private _emitTo: ((target: string, name: string, payload: unknown) => Promise<void>) | null =
     null;
+  private _invoke: ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null =
+    null;
   private _stopping = false;
+  // Incremented by handleStop so an in-flight decode/render can't start
+  // playback after the user stopped it
+  private _playGeneration = 0;
 
   // Modular components
   private _analyser = new AudioAnalyser();
@@ -59,26 +71,27 @@ class PlaybackStore {
     // Initialize fragment queue with handlers
     this._fragmentQueue = new FragmentQueue({
       onFragmentPlay: async (fragment: QueuedFragment) => {
-        console.log(
-          "[PlaybackStore] onFragmentPlay: index",
-          fragment.index,
-          "total",
-          fragment.total
-        );
         this.currentFragmentIndex = fragment.index;
         this.totalFragments = fragment.total;
-        await this.handleAudioReady(fragment.audioBase64);
+        await this.handleAudioReady(fragment);
       },
       onQueueComplete: () => {
-        console.log("[PlaybackStore] onQueueComplete");
         this._analyser.stop();
         this.isPlaying = false;
         this.isPaused = false;
         this.currentFragmentIndex = null;
         this.totalFragments = null;
         void this._emit?.("hud:stop", null);
+        this.reportPlaybackState(false, false);
       }
     });
+  }
+
+  // Playback happens in this webview; the backend needs the state for the
+  // tray busy icon, tray click behavior, and HUD auto-hide.
+  private reportPlaybackState(playing: boolean, paused: boolean): void {
+    if (!this._invoke) return;
+    this._invoke("set_playback_state", { playing, paused }).catch(() => {});
   }
 
   setAudioElement(el: HTMLAudioElement | null) {
@@ -99,12 +112,14 @@ class PlaybackStore {
     }
   }
 
-  async buildPlaybackUrl(pitchRatio: number): Promise<string> {
+  async buildPlaybackUrl(pitchRatio: number, applyPreroll?: boolean): Promise<string> {
     const effectId = this.activeEffect;
+    const preroll = applyPreroll ?? this.shouldApplyWindowsPreroll();
     if (
       this._cachedPitchUrl &&
       this._cachedPitchUrl.ratio === pitchRatio &&
-      this._cachedPitchUrl.effectId === effectId
+      this._cachedPitchUrl.effectId === effectId &&
+      this._cachedPitchUrl.preroll === preroll
     ) {
       return this._cachedPitchUrl.url;
     }
@@ -114,7 +129,7 @@ class PlaybackStore {
     }
     const effect = getEffect(effectId);
     let blob: Blob;
-    if (!this.shouldApplyWindowsPreroll() && pitchRatio === 1.0 && !effect && this._originalBytes) {
+    if (!preroll && pitchRatio === 1.0 && !effect && this._originalBytes) {
       const mimeType = detectAudioMimeType(this._originalBytes);
       blob = new Blob([this._originalBytes], { type: mimeType });
     } else if (this._decodedBuffer && this._audioCtx) {
@@ -138,7 +153,7 @@ class PlaybackStore {
       if (effect) {
         buffer = await effect.process(buffer, this._audioCtx);
       }
-      if (this.shouldApplyWindowsPreroll()) {
+      if (preroll) {
         buffer = prependLowLevelPreroll(buffer, WINDOWS_AUDIO_PREROLL_MS);
       }
       blob = audioBufferToWavBlob(buffer);
@@ -146,7 +161,7 @@ class PlaybackStore {
       return "";
     }
     const url = URL.createObjectURL(blob);
-    this._cachedPitchUrl = { ratio: pitchRatio, effectId, url };
+    this._cachedPitchUrl = { ratio: pitchRatio, effectId, preroll, url };
     return url;
   }
 
@@ -154,54 +169,94 @@ class PlaybackStore {
     return isTauri && navigator.userAgent.includes("Windows");
   }
 
-  async handleAudioReady(base64: string): Promise<void> {
-    console.log("[PlaybackStore] handleAudioReady called, base64 length:", base64.length);
-    const binary = atob(base64);
-    const arrayBuffer = new ArrayBuffer(binary.length);
-    const bytes = new Uint8Array(arrayBuffer);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
+  async handleAudioReady(fragment: QueuedFragment): Promise<void> {
+    const base64 = fragment.audioBase64;
+    const gen = this._playGeneration;
 
-    this._originalBytes = arrayBuffer.slice(0);
+    // Invalidate caches for new audio fragment
     if (this._cachedPitchUrl) {
       URL.revokeObjectURL(this._cachedPitchUrl.url);
       this._cachedPitchUrl = null;
     }
+    this._originalBytes = null;
 
-    if (!this._audioCtx) {
-      this._audioCtx = new AudioContext();
+    // Use pre-decoded buffer if available (from background pre-decode)
+    if (fragment.decodedBuffer) {
+      this._decodedBuffer = fragment.decodedBuffer;
+      fragment.decodedBuffer = undefined; // Free memory — PCM buffer no longer needed
+    } else {
+      const binary = atob(base64);
+      const len = binary.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+
+      // decodeAudioData detaches the buffer it is given — hand it a copy and
+      // keep the original for the raw-bytes fast path in buildPlaybackUrl.
+      this._originalBytes = bytes.buffer;
+
+      // Wire AnalyserNode once per audio element (guard prevents double-wiring)
+      if (this._audioEl && this._audioCtx && !this._analyser.getAnalyser()) {
+        this._analyser.setup(this._audioEl, this._audioCtx, {
+          emitTo: this._emitTo
+        });
+      }
+
+      try {
+        this._decodedBuffer = await this._audioCtx!.decodeAudioData(bytes.buffer.slice(0));
+      } catch (e) {
+        this.error = `Audio decode error: ${e}`;
+        // Advance the queue — leaving isProcessing stuck would block every
+        // subsequent fragment until restart.
+        this._fragmentQueue.handleFragmentEnded();
+        return;
+      }
     }
 
-    // Resume AudioContext if suspended (required on clean Windows 11 / strict autoplay policies)
-    if (this._audioCtx.state === "suspended") {
-      await this._audioCtx.resume();
-    }
+    // The user stopped playback while we were decoding — don't start it.
+    if (gen !== this._playGeneration) return;
 
-    // Wire AnalyserNode once per audio element (guard prevents double-wiring)
-    if (this._audioEl && this._audioCtx && !this._analyser.getAnalyser()) {
-      this._analyser.setup(this._audioEl, this._audioCtx, {
-        emitTo: this._emitTo
-      });
+    if (this._decodedBuffer) {
+      const accurateDurationMs = Math.round(this._decodedBuffer.duration * 1000);
+      hudStore.setAccurateDurationMs(accurateDurationMs);
+      this._emit?.("hud:audio-duration", accurateDurationMs);
     }
+    // The preroll masks the Windows audio-device wake-up clip; only the first
+    // fragment of a playback needs it. Continuation fragments arrive while the
+    // device is already active — skipping the preroll removes a 200ms gap and
+    // a decode/re-encode per fragment.
+    const isContinuation = fragment.total > 1 && fragment.index > 0;
+    const url = await this.buildPlaybackUrl(
+      this.pitch,
+      this.shouldApplyWindowsPreroll() && !isContinuation
+    );
+    if (gen !== this._playGeneration) return;
+    if (this._audioEl && url) {
+      this._audioEl.src = url;
+      if (this.hudEnabled) {
+        this._analyser.start();
+      }
+      this.playAudio();
+    }
+    this.hasCachedAudio = true;
 
+    // Pre-decode the next fragment in the background while this one plays
+    this.predecodeNextFragment();
+  }
+
+  private async predecodeNextFragment(): Promise<void> {
+    const fragments = this._fragmentQueue.getQueue();
+    if (fragments.length < 2) return;
+    const nextFragment = fragments[1]; // [0] is current, [1] is next
+    if (nextFragment.decodedBuffer || !this._audioCtx) return;
+
+    const binary = atob(nextFragment.audioBase64);
+    const len = binary.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
     try {
-      this._decodedBuffer = await this._audioCtx.decodeAudioData(arrayBuffer.slice(0));
-      if (this._decodedBuffer) {
-        const accurateDurationMs = Math.round(this._decodedBuffer.duration * 1000);
-        hudStore.setAccurateDurationMs(accurateDurationMs);
-        // Emit to HUD window for cross-window state sync
-        this._emit?.("hud:audio-duration", accurateDurationMs);
-      }
-      const url = await this.buildPlaybackUrl(this.pitch);
-      if (this._audioEl && url) {
-        this._audioEl.src = url;
-        this._analyser.start(); // Start amplitude capture BEFORE audio plays
-        this.playAudio();
-      }
-      this.hasCachedAudio = true;
+      nextFragment.decodedBuffer = await this._audioCtx.decodeAudioData(bytes.buffer);
     } catch (e) {
-      this.error = `Audio decode error: ${e}`;
+      console.debug("[PlaybackStore] Pre-decode failed:", e);
     }
   }
 
@@ -216,27 +271,15 @@ class PlaybackStore {
     is_final: boolean;
     text: string;
   }): Promise<void> {
-    console.log(
-      "[PlaybackStore] handleFragmentReady: index",
-      payload.fragment_index,
-      "total",
-      payload.fragment_total,
-      "is_final",
-      payload.is_final
-    );
     // Add to queue
     this._fragmentQueue.enqueue({
       audioBase64: payload.audio_base64,
       index: payload.fragment_index,
       total: payload.fragment_total,
-      text: payload.text
+      text: payload.text,
+      isFinal: payload.is_final
     });
-    console.log(
-      "[PlaybackStore] Queue length:",
-      this._fragmentQueue.getQueueLength(),
-      "isProcessing:",
-      this._fragmentQueue.isProcessing()
-    ); // Start processing if not already
+    // Start processing if not already
     if (!this._fragmentQueue.isProcessing()) {
       await this._fragmentQueue.startProcessing();
     }
@@ -249,17 +292,10 @@ class PlaybackStore {
     }
     this._audioEl.volume = this.volume / 100;
     this._audioEl.playbackRate = this.speed;
-    console.log(
-      "[PlaybackStore] playAudio: volume",
-      this.volume,
-      "speed",
-      this.speed,
-      "src",
-      this._audioEl.src?.substring(0, 50)
-    );
     this._audioEl.play().catch((err) => {
       console.error("[PlaybackStore] play() failed:", err);
     });
+    this.reportPlaybackState(true, false);
   }
 
   async handleReplay(): Promise<void> {
@@ -275,6 +311,9 @@ class PlaybackStore {
   handleStop() {
     this._analyser.stop();
     this._stopping = true;
+    // Invalidate any in-flight decode/render so it can't start playback
+    // after the user stopped it.
+    this._playGeneration++;
 
     // Clear the fragment queue
     this._fragmentQueue.clear();
@@ -288,6 +327,7 @@ class PlaybackStore {
     this.isPlaying = false;
     this.isPaused = false;
     void this._emit?.("hud:stop", null);
+    this.reportPlaybackState(false, false);
     setTimeout(() => {
       this._stopping = false;
     }, 0);
@@ -302,13 +342,19 @@ class PlaybackStore {
       this._audioEl.pause();
       this.isPaused = true;
     }
+    this.reportPlaybackState(true, this.isPaused);
   }
 
   // Keep volume/speed in sync with config (called by synthesize-page via $effect)
   syncPlaybackConfig(volume: number, speed: number, pitch: number, effect: EffectId = "none") {
-    this.volume = volume;
-    this.speed = speed;
-    this.pitch = pitch;
+    // Config may omit playback_speed/pitch (legacy fields migrated to profiles),
+    // so coerce to finite defaults to avoid NaN assignments that throw inside effects.
+    const vol = Number.isFinite(volume) ? volume : 100;
+    const spd = Number.isFinite(speed) ? speed : 1.0;
+    const pit = Number.isFinite(pitch) ? pitch : 1.0;
+    this.volume = vol;
+    this.speed = spd;
+    this.pitch = pit;
     if (this.activeEffect !== effect) {
       this.activeEffect = effect;
       if (this._cachedPitchUrl) {
@@ -317,34 +363,37 @@ class PlaybackStore {
       }
     }
     if (this._audioEl) {
-      this._audioEl.volume = volume / 100;
-      this._audioEl.playbackRate = speed;
+      this._audioEl.volume = vol / 100;
+      this._audioEl.playbackRate = spd;
     }
     // Sync pitch and speed to HUD store for progress bar timing
-    hudStore.setPitch(pitch);
-    hudStore.setSpeed(speed);
+    hudStore.setPitch(pit);
+    hudStore.setSpeed(spd);
   }
 
   async setupListeners(): Promise<void> {
     if (!isTauri) return;
-    console.log("[PlaybackStore] Setting up listeners...");
     try {
       const { listen, emit, emitTo } = await import("@tauri-apps/api/event");
+      const { invoke } = await import("@tauri-apps/api/core");
       this._emit = emit;
       this._emitTo = emitTo;
-      console.log("[PlaybackStore] event API loaded");
+      this._invoke = invoke;
 
-      // Note: AnalyserNode is set up in handleAudioReady once we have an AudioContext
-      // _audioCtx is null here until audio is first decoded
+      // Pre-warm AudioContext at startup to avoid cold-start delay on first playback
+      this._audioCtx = new AudioContext();
+      if (this._audioCtx.state === "suspended") {
+        await this._audioCtx.resume();
+      }
 
       // Legacy single audio-ready event (for non-paginated playback)
       const unAudioReady = await listen<string>("audio-ready", async (e) => {
-        console.log("[PlaybackStore] audio-ready received");
         this._fragmentQueue.enqueue({
           audioBase64: e.payload,
           index: 1,
           total: 1,
-          text: ""
+          text: "",
+          isFinal: true
         });
         if (!this._fragmentQueue.isProcessing()) {
           await this._fragmentQueue.startProcessing();
@@ -359,16 +408,8 @@ class PlaybackStore {
         is_final: boolean;
         text: string;
       }>("audio-fragment-ready", async (e) => {
-        console.log(
-          "[PlaybackStore] audio-fragment-ready received, index:",
-          e.payload.fragment_index,
-          "total:",
-          e.payload.fragment_total
-        );
         await this.handleFragmentReady(e.payload);
       });
-
-      console.log("[PlaybackStore] All listeners registered");
 
       const unPlaybackStop = await listen("playback-stop", () => {
         this.handleStop();
@@ -387,13 +428,20 @@ class PlaybackStore {
         this.handleStop();
       });
 
+      // Mid-stream synthesis failure: the final fragment will never arrive,
+      // so stop instead of waiting forever with the HUD visible.
+      const unFailed = await listen("pagination:failed", () => {
+        this.handleStop();
+      });
+
       this._unlistenFns = [
         unAudioReady,
         unFragmentReady,
         unPlaybackStop,
         unTogglePause,
         unSynthesis,
-        unAbort
+        unAbort,
+        unFailed
       ];
     } catch (e) {
       console.error("Failed to setup playback listeners:", e);
@@ -415,6 +463,7 @@ class PlaybackStore {
     }
     this._emit = null;
     this._emitTo = null;
+    this._invoke = null;
     this._decodedBuffer = null;
     this._originalBytes = null;
     this.hasCachedAudio = false;

@@ -1,4 +1,4 @@
-// TTS engine configuration: backend selection, local CLI, OpenAI, ElevenLabs, HTTP configs.
+﻿// TTS engine configuration: backend selection, local CLI, OpenAI, ElevenLabs, HTTP configs.
 
 use serde::{Deserialize, Serialize};
 
@@ -7,24 +7,21 @@ use crate::tts::catalog;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum TtsEngine {
     Local,
     Http,
     OpenAI,
     ElevenLabs,
+    #[default]
     Cartesia,
     Google,
     Microsoft,
     Edge,
 }
 
-impl Default for TtsEngine {
-    fn default() -> Self {
-        TtsEngine::Edge
-    }
-}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OpenAIConfig {
     // Credential — persisted. Profile owns model/voice/format/instructions.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -61,12 +58,12 @@ impl Default for OpenAIConfig {
 
 impl OpenAIConfig {
     pub fn validate(&self) -> Vec<ValidationError> {
-        let errors = Vec::new();
-        errors
+        
+        Vec::new()
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ElevenLabsConfig {
     // Credential — persisted. Profile owns voice/model/format/knobs.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -126,12 +123,12 @@ impl Default for ElevenLabsConfig {
 
 impl ElevenLabsConfig {
     pub fn validate(&self) -> Vec<ValidationError> {
-        let errors = Vec::new();
-        errors
+        
+        Vec::new()
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CartesiaConfig {
     // Credential — persisted. Profile owns model/voice/format/knobs.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -170,17 +167,15 @@ impl Default for CartesiaConfig {
 
 impl CartesiaConfig {
     pub fn validate(&self) -> Vec<ValidationError> {
-        let errors = Vec::new();
-        errors
+        
+        Vec::new()
     }
 }
 
-// ── Google Gemini TTS ─────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct GoogleTtsConfig {
-    // Credential — persisted. Profile owns model/voice/format.
+    // Credential ΓÇö persisted. Profile owns model/voice/format.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub api_key: String,
     #[serde(skip_serializing)]
@@ -208,12 +203,12 @@ impl GoogleTtsConfig {
     }
 }
 
-// ── Microsoft MAI-Voice-2 ─────────────────────────────────────────────────────
+// ΓöÇΓöÇ Microsoft MAI-Voice-2 ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct MicrosoftTtsConfig {
-    // Credentials — persisted. Profile owns model/voice/format.
+    // Credentials ΓÇö persisted. Profile owns model/voice/format.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub api_key: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -244,9 +239,9 @@ impl MicrosoftTtsConfig {
     }
 }
 
-// ── Edge-TTS (free Microsoft Read Aloud via rany2/edge-tts) ───────────────────
+// ΓöÇΓöÇ Edge-TTS (free Microsoft Read Aloud via rany2/edge-tts) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct EdgeTtsConfig {
     pub voice: String,
@@ -266,9 +261,9 @@ impl EdgeTtsConfig {
     }
 }
 
-// ── Generic HTTP-serving TTS ──────────────────────────────────────────────────
+// ΓöÇΓöÇ Generic HTTP-serving TTS ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct HttpTtsConfig {
     pub profile_id: String,
@@ -302,9 +297,9 @@ impl HttpTtsConfig {
     }
 }
 
-// ── Voice profiles ────────────────────────────────────────────────────────────
+// ΓöÇΓöÇ Voice profiles ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ProfileEffects {
     pub enabled: bool,
@@ -348,7 +343,7 @@ impl Default for BracketedEmoteStrategy {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ProfileTextProcessing {
     pub mode: ProfileTextProcessingMode,
@@ -366,7 +361,7 @@ impl Default for ProfileTextProcessing {
     }
 }
 
-// ── Typed per-engine profile options ──────────────────────────────────────────
+// ΓöÇΓöÇ Typed per-engine profile options ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 //
 // On disk each profile's options are an object tagged with the engine name
 // (e.g. `{ "engine": "openai", "model": "tts-1" }`). Legacy configs/exports
@@ -669,7 +664,7 @@ impl<'de> Deserialize<'de> for ProfileEngineOptions {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct VoiceProfile {
     pub id: String,
@@ -746,7 +741,7 @@ fn schema_version_absent() -> u32 {
     0
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct TtsConfig {
     // Field-level defaults override the container default so that a legacy config
@@ -771,6 +766,8 @@ pub struct TtsConfig {
     pub args_template: Vec<String>,
     #[serde(default, skip_serializing)]
     pub voice: String,
+    #[serde(default)]
+    pub cuda: bool,
 
     // Per-engine global structs persist ONLY their credential fields
     // (api_key, endpoint); all profile-owned knobs are skip_serializing at
@@ -882,6 +879,7 @@ impl Default for TtsConfig {
                 "{output}".into(),
             ],
             voice: "Rosie".into(),
+            cuda: false,
             openai: OpenAIConfig::default(),
             elevenlabs: ElevenLabsConfig::default(),
             cartesia: CartesiaConfig::default(),

@@ -49,37 +49,6 @@ pub fn disable_autostart() -> Result<(), String> {
     }
 }
 
-#[allow(dead_code)]
-pub fn is_autostart_enabled() -> Result<bool, String> {
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let run_key = hkcu
-        .open_subkey_with_flags(REGISTRY_KEY, KEY_READ)
-        .map_err(|e| format!("Failed to open registry key for reading: {}", e))?;
-
-    match run_key.get_value::<String, _>(APP_NAME) {
-        Ok(stored_path) => {
-            let current_exe = get_current_exe_path()?;
-            let current_exe_str = current_exe.to_string_lossy();
-
-            let is_match = stored_path.trim_matches('"') == current_exe_str;
-            log::debug!(
-                "Auto-start check: stored='{}', current='{}', match={}",
-                stored_path,
-                current_exe_str,
-                is_match
-            );
-            Ok(is_match)
-        }
-        Err(e) => {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                Ok(false)
-            } else {
-                Err(format!("Failed to read registry value: {}", e))
-            }
-        }
-    }
-}
-
 pub fn sync_autostart_with_config(enabled: bool) -> Result<(), String> {
     if enabled {
         enable_autostart()
@@ -101,11 +70,5 @@ mod tests {
             path.to_string_lossy().ends_with(".exe")
                 || path.to_string_lossy().contains("copyspeak")
         );
-    }
-
-    #[test]
-    fn test_is_autostart_enabled_does_not_crash() {
-        let result = is_autostart_enabled();
-        assert!(result.is_ok());
     }
 }

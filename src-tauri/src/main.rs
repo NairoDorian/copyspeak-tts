@@ -3,6 +3,14 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[macro_export]
+macro_rules! lock_or_recover {
+    ($mutex:expr) => {
+        $mutex.lock().unwrap_or_else(|e| e.into_inner())
+    };
+}
+
+
 mod audio;
 mod autostart;
 mod clipboard;
@@ -11,7 +19,6 @@ mod config;
 mod control_server;
 mod fragment_queue;
 mod history;
-mod history_manager;
 mod hud;
 mod logging;
 mod pagination;
@@ -219,10 +226,99 @@ pub fn register_hotkey(
     Ok(())
 }
 
+/// Spawn an async task to read clipboard and speak it.
+/// Shared by tray button and global hotkey.
+/// Routes long texts to speak_queued for streaming fragment-by-fragment playback
+/// (lower time-to-first-audio), short texts to speak_now (simpler path).
+fn spawn_speak(app: &tauri::AppHandle) {
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let config: State<std::sync::Mutex<config::AppConfig>> = app_handle.state();
+        let player: State<std::sync::Mutex<audio::AudioPlayer>> = app_handle.state();
+        let history: State<std::sync::Mutex<history::HistoryLog>> = app_handle.state();
+        let telemetry_state: State<std::sync::Mutex<telemetry::TelemetryLog>> = app_handle.state();
+
+        // H7: Route long texts through speak_queued for streaming playback.
+        // speak_now's paginated path waits for all fragments then concats — TTFA
+        // equals full synthesis time. speak_queued streams each fragment as it
+        // arrives, so the user hears audio after the first fragment.
+        // Read the clipboard once and pass the text through so the command
+        // doesn't open the clipboard a second time.
+        let clip_text = crate::clipboard::get_clipboard_text();
+        let (sanitization_config, max_text_length, pagination_enabled, output_enabled, fragment_size) = {
+            let cfg = crate::lock_or_recover!(config);
+            (
+                cfg.sanitization.clone(),
+                cfg.trigger.max_text_length,
+                cfg.pagination.enabled,
+                cfg.output.enabled,
+                cfg.pagination.fragment_size,
+            )
+        };
+
+        // Mirror the double-copy path: sanitize and cap the clipboard text so
+        // the hotkey/tray trigger speaks the same thing a double-copy would.
+        let clip_text = clip_text.map(|text| {
+            let sanitized = if sanitization_config.enabled {
+                crate::sanitize::sanitize_text(&text, &sanitization_config)
+            } else {
+                text
+            };
+            if sanitized.chars().count() > max_text_length as usize {
+                sanitized.chars().take(max_text_length as usize).collect()
+            } else {
+                sanitized
+            }
+        });
+
+        let use_streaming = match &clip_text {
+            Some(text) => {
+                pagination_enabled
+                    && !output_enabled
+                    && text.chars().count() > fragment_size as usize
+            }
+            None => false,
+        };
+
+        let result = if use_streaming {
+            let queue: State<std::sync::Mutex<crate::fragment_queue::FragmentQueue>> =
+                app_handle.state();
+            commands::speak_queued(
+                app_handle.clone(),
+                config,
+                player,
+                history,
+                queue,
+                telemetry_state,
+                clip_text,
+            )
+            .await
+        } else {
+            commands::speak_now(
+                app_handle.clone(),
+                config,
+                player,
+                history,
+                telemetry_state,
+                clip_text,
+            )
+            .await
+        };
+
+        if let Err(e) = result {
+            log::error!("Failed to speak: {}", e);
+        }
+    });
+}
+
 /// Abort any in-progress synthesis and stop playback.
 /// Called from the abort_synthesis command and tray icon click handler.
 pub fn do_abort_synthesis(app: &tauri::AppHandle) {
     log::info!("[Abort] Aborting synthesis");
+
+    // Signal abort FIRST so the failing request's error handlers (and the
+    // fragment loops) observe the flag before the server disappears.
+    ABORT_REQUESTED.store(true, Ordering::Relaxed);
 
     // Kill CLI process if running
     let pid = ACTIVE_CLI_PID.load(Ordering::Relaxed);
@@ -231,8 +327,56 @@ pub fn do_abort_synthesis(app: &tauri::AppHandle) {
         ACTIVE_CLI_PID.store(0, Ordering::Relaxed);
     }
 
-    // Signal abort to synthesis tasks
-    ABORT_REQUESTED.store(true, Ordering::Relaxed);
+    // When Piper server is active, unload it so any blocked send()
+    // errors out immediately rather than waiting for the per-request
+    // timeout.
+    let _ = crate::tts::cli::unload_piper_model_internal();
+
+    // H3: Unload any local TTS server (Kokoro/Kitten/Pocket) for the same reason.
+    crate::tts::local_tts_server::unload_all();
+
+    // Re-prewarm the active engine in the background so the next utterance
+    // doesn't pay a multi-second cold start.
+    {
+        let config = app.state::<std::sync::Mutex<config::AppConfig>>();
+        let cfg = crate::lock_or_recover!(config);
+        if cfg.tts.active_backend == config::TtsEngine::Local {
+            match cfg.tts.preset.as_str() {
+                "piper" => {
+                    crate::tts::cli::prewarm_piper_server(
+                        cfg.tts.command.clone(),
+                        cfg.tts.voice.clone(),
+                        tts::cli::CliTtsBackend::data_dir(),
+                        cfg.tts.cuda,
+                    );
+                }
+                "kokoro-tts" => {
+                    let backend = tts::cli::CliTtsBackend::new(
+                        cfg.tts.command.clone(),
+                        cfg.tts.args_template.clone(),
+                        cfg.tts.cuda,
+                        "kokoro-tts".into(),
+                    );
+                    let args = backend.kokoro_model_args();
+                    tts::cli::prewarm_local_server("kokoro".into(), cfg.tts.command.clone(), args);
+                }
+                "kitten-tts" => {
+                    let backend = tts::cli::CliTtsBackend::new(
+                        cfg.tts.command.clone(),
+                        cfg.tts.args_template.clone(),
+                        cfg.tts.cuda,
+                        "kitten-tts".into(),
+                    );
+                    let args = backend.kitten_model_args();
+                    tts::cli::prewarm_local_server("kitten".into(), cfg.tts.command.clone(), args);
+                }
+                "pocket-tts" => {
+                    tts::cli::prewarm_local_server("pocket".into(), cfg.tts.command.clone(), Vec::new());
+                }
+                _ => {}
+            }
+        }
+    }
 
     // Reset synthesis state
     {
@@ -261,7 +405,7 @@ use std::sync::Arc;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager, State,
+    Emitter, Listener, Manager, State,
 };
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
@@ -270,22 +414,32 @@ fn main() {
         eprintln!("Failed to initialize logging: {}", e);
     }
 
-    // Load .env (next to copyspeak.exe) before any backend reads credentials.
-    secrets::load_dotenv();
-
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .setup(|app| {
             // --- Load config ---
-            let cfg = config::load_or_default();
+            let mut cfg = config::load_or_default();
+
+            // S1: Generate control server token on first run if missing
+            // Uses OS CSPRNG (e.g. BCryptGenRandom on Windows, getrandom on Linux).
+            // Token lives in plaintext config — fine for the threat model
+            // (same-user processes can read it by definition).
+            if cfg.general.control_token.is_none() {
+                let mut buf = [0u8; 16];
+                getrandom::getrandom(&mut buf).expect("OS RNG");
+                let token = buf.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                cfg.general.control_token = Some(token);
+                let _ = config::save(&cfg);
+            }
+
+            let initial_listen = cfg.trigger.listen_enabled;
             app.manage(std::sync::Mutex::new(cfg));
 
             // --- Init audio player with saved config ---
-            let app_handle = app.handle().clone();
-            let mut player = audio::AudioPlayer::new(app_handle);
+            let mut player = audio::AudioPlayer::new();
             // Apply saved mode from config
             {
                 let cfg = app.state::<std::sync::Mutex<config::AppConfig>>();
-                let cfg = cfg.lock().unwrap();
+                let cfg = crate::lock_or_recover!(cfg);
                 player.set_mode(cfg.playback.on_retrigger.clone());
             }
             app.manage(std::sync::Mutex::new(player));
@@ -293,10 +447,6 @@ fn main() {
             // --- Init speech history log ---
             let history = history::load();
             app.manage(std::sync::Mutex::new(history));
-
-            // --- Init history manager (centralized history operations) ---
-            let history_manager = history_manager::HistoryManager::new();
-            app.manage(std::sync::Mutex::new(history_manager));
 
             // --- Init cached audio state (for replay) ---
             app.manage(std::sync::Mutex::new(commands::CachedAudio::default()));
@@ -309,7 +459,7 @@ fn main() {
             app.manage(std::sync::Mutex::new(telemetry));
 
             // --- Init listening state (shared with clipboard thread) ---
-            let is_listening = Arc::new(AtomicBool::new(true));
+            let is_listening = Arc::new(AtomicBool::new(initial_listen));
             app.manage(is_listening.clone());
 
             // --- Init Job status ---
@@ -330,12 +480,19 @@ fn main() {
                 None::<&str>,
             )?;
             let sep1 = PredefinedMenuItem::separator(app)?;
-            let toggle_item = MenuItem::with_id(app, "toggle", "● Listening", true, None::<&str>)?;
+            let toggle_label = if initial_listen {
+                "● Listening"
+            } else {
+                "○ Paused"
+            };
+            let toggle_item = MenuItem::with_id(app, "toggle", toggle_label, true, None::<&str>)?;
             let speak_item =
                 MenuItem::with_id(app, "speak", "Speak Clipboard Now", true, None::<&str>)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
             let settings_item =
                 MenuItem::with_id(app, "settings", "Settings...", true, Some("Ctrl+,"))?;
+            let unload_item =
+                MenuItem::with_id(app, "unload_model", "Unload Model", true, None::<&str>)?;
             let sep3 = PredefinedMenuItem::separator(app)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, Some("Ctrl+Q"))?;
 
@@ -348,13 +505,27 @@ fn main() {
                     &speak_item,
                     &sep2,
                     &settings_item,
+                    &unload_item,
                     &sep3,
                     &quit_item,
                 ],
             )?;
 
+            // --- Listen to config-changed to update the tray menu item label dynamically ---
+            let toggle_item_for_listener = toggle_item.clone();
+            let app_handle_for_listener = app.handle().clone();
+            app.listen("config-changed", move |_event| {
+                let is_listening_state = app_handle_for_listener.state::<Arc<AtomicBool>>();
+                let state = is_listening_state.load(Ordering::Relaxed);
+                let label = if state {
+                    "● Listening"
+                } else {
+                    "○ Paused"
+                };
+                let _ = toggle_item_for_listener.set_text(label);
+            });
+
             let is_listening_for_tray = is_listening.clone();
-            let toggle_item_for_event = toggle_item.clone();
             let _tray = TrayIconBuilder::with_id("main")
                 .menu(&menu)
                 .tooltip("CopySpeak")
@@ -367,42 +538,25 @@ fn main() {
                             is_listening_for_tray.store(new_state, Ordering::Relaxed);
                             log::info!("Tray: toggle listening -> {}", new_state);
 
-                            // Update menu item label
-                            let label = if new_state {
-                                "● Listening"
-                            } else {
-                                "○ Paused"
-                            };
-                            let _ = toggle_item_for_event.set_text(label);
+                            // Update in-memory config and persist to disk
+                            let config_state = app.state::<std::sync::Mutex<config::AppConfig>>();
+                            if let Ok(mut cfg) = config_state.lock() {
+                                cfg.trigger.listen_enabled = new_state;
+                                if let Err(e) = config::save(&cfg) {
+                                    log::error!("Failed to save config on tray toggle: {}", e);
+                                }
+                            }
+
+                            // Emit config-changed event to sync the frontend and tray icon
+                            let _ = app.emit("config-changed", ());
                         }
                         "speak" => {
                             log::info!("Tray: speak clipboard");
-                            // Clone app handle for async context
-                            let app_handle = app.clone();
-                            tauri::async_runtime::spawn(async move {
-                                // Get required states inside the async block
-                                let config: State<std::sync::Mutex<config::AppConfig>> =
-                                    app_handle.state();
-                                let player: State<std::sync::Mutex<audio::AudioPlayer>> =
-                                    app_handle.state();
-                                let history: State<std::sync::Mutex<history::HistoryLog>> =
-                                    app_handle.state();
-                                let telemetry_state: State<
-                                    std::sync::Mutex<telemetry::TelemetryLog>,
-                                > = app_handle.state();
-                                if let Err(e) = commands::speak_now(
-                                    app_handle.clone(),
-                                    config,
-                                    player,
-                                    history,
-                                    telemetry_state,
-                                    None,
-                                )
-                                .await
-                                {
-                                    log::error!("Failed to speak from tray: {}", e);
-                                }
-                            });
+                            spawn_speak(app);
+                        }
+                        "unload_model" => {
+                            log::info!("Tray: Unload Model");
+                            let _ = crate::tts::cli::unload_piper_model_internal();
                         }
                         "settings" => {
                             if let Some(window) = app.get_webview_window("main") {
@@ -467,7 +621,7 @@ fn main() {
                         let close_behavior = {
                             let cfg: State<std::sync::Mutex<config::AppConfig>> =
                                 app_handle.state();
-                            let cfg = cfg.lock().unwrap();
+                            let cfg = crate::lock_or_recover!(cfg);
                             cfg.general.close_behavior.clone()
                         };
 
@@ -491,6 +645,10 @@ fn main() {
             // ponytail: HUD stays visible but parked off-screen; show_* repositions on-screen.
             // Avoids the WebView2 transparent-window hidden→visible repaint bug.
             if let Some(hud_window) = app.get_webview_window("hud") {
+                let cfg_state = app.state::<std::sync::Mutex<config::AppConfig>>();
+                let cfg = crate::lock_or_recover!(cfg_state);
+                hud::position_hud_window(&hud_window, &cfg.hud);
+                drop(cfg);
                 let _ = hud_window.set_ignore_cursor_events(true);
                 // Refocus main window (HUD briefly steals focus)
                 if let Some(main_window) = app.get_webview_window("main") {
@@ -518,10 +676,60 @@ fn main() {
                 clipboard::run_clipboard_listener(app_handle, is_listening_clone);
             });
 
+            // --- Pre-warm local TTS servers if configured ---
+            {
+                tts::piper_server::set_piper_app_handle(app.handle().clone());
+                tts::local_tts_server::set_local_tts_app_handle(app.handle().clone());
+
+                let cfg = app.state::<std::sync::Mutex<config::AppConfig>>();
+                let cfg = crate::lock_or_recover!(cfg);
+                if cfg.tts.active_backend == config::TtsEngine::Local {
+                    match cfg.tts.preset.as_str() {
+                        "piper" => {
+                            let data_dir = tts::cli::CliTtsBackend::data_dir();
+                            log::info!("[Piper] Auto-starting server at app launch (voice: {}, cuda: {})", cfg.tts.voice, cfg.tts.cuda);
+                            tts::cli::prewarm_piper_server(
+                                cfg.tts.command.clone(),
+                                cfg.tts.voice.clone(),
+                                data_dir,
+                                cfg.tts.cuda,
+                            );
+                        }
+                        "kokoro-tts" => {
+                            log::info!("[Kokoro] Auto-starting server at app launch");
+                            let backend = tts::cli::CliTtsBackend::new(
+                                cfg.tts.command.clone(),
+                                cfg.tts.args_template.clone(),
+                                cfg.tts.cuda,
+                                "kokoro-tts".into(),
+                            );
+                            let args = backend.kokoro_model_args();
+                            tts::cli::prewarm_local_server("kokoro".into(), cfg.tts.command.clone(), args);
+                        }
+                        "kitten-tts" => {
+                            log::info!("[Kitten] Auto-starting server at app launch");
+                            let backend = tts::cli::CliTtsBackend::new(
+                                cfg.tts.command.clone(),
+                                cfg.tts.args_template.clone(),
+                                cfg.tts.cuda,
+                                "kitten-tts".into(),
+                            );
+                            let args = backend.kitten_model_args();
+                            tts::cli::prewarm_local_server("kitten".into(), cfg.tts.command.clone(), args);
+                        }
+                        "pocket-tts" => {
+                            log::info!("[Pocket] Auto-starting server at app launch");
+                            tts::cli::prewarm_local_server("pocket".into(), cfg.tts.command.clone(), Vec::new());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
             // --- Register global hotkey ---
             let hotkey_config = {
                 let cfg = app.state::<std::sync::Mutex<config::AppConfig>>();
-                let cfg = cfg.lock().unwrap();
+                let cfg = crate::lock_or_recover!(cfg);
                 cfg.hotkey.clone()
             };
 
@@ -536,7 +744,7 @@ fn main() {
                 let player: State<std::sync::Mutex<audio::AudioPlayer>> =
                     app_handle_for_monitor.state();
                 let finished = {
-                    let p = player.lock().unwrap();
+                    let p = crate::lock_or_recover!(player);
                     p.take_playback_finished()
                 };
                 if finished {
@@ -556,29 +764,7 @@ fn main() {
                 .with_handler(move |app, _shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
                         log::info!("Global hotkey triggered: speak from clipboard");
-                        let app_handle = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let config: State<std::sync::Mutex<config::AppConfig>> =
-                                app_handle.state();
-                            let player: State<std::sync::Mutex<audio::AudioPlayer>> =
-                                app_handle.state();
-                            let history: State<std::sync::Mutex<history::HistoryLog>> =
-                                app_handle.state();
-                            let telemetry_state: State<std::sync::Mutex<telemetry::TelemetryLog>> =
-                                app_handle.state();
-                            if let Err(e) = commands::speak_now(
-                                app_handle.clone(),
-                                config,
-                                player,
-                                history,
-                                telemetry_state,
-                                None,
-                            )
-                            .await
-                            {
-                                log::error!("Failed to speak from hotkey: {}", e);
-                            }
-                        });
+                        spawn_speak(app);
                     }
                 })
                 .build(),
@@ -593,42 +779,11 @@ fn main() {
                 let _ = window.set_focus();
             }
         }))
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(move |app, _shortcut, event| {
-                    if event.state() == ShortcutState::Pressed {
-                        log::info!("Global hotkey triggered: speak from clipboard");
-                        let app_handle = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let config: State<std::sync::Mutex<config::AppConfig>> =
-                                app_handle.state();
-                            let player: State<std::sync::Mutex<audio::AudioPlayer>> =
-                                app_handle.state();
-                            let history: State<std::sync::Mutex<history::HistoryLog>> =
-                                app_handle.state();
-                            let telemetry_state: State<std::sync::Mutex<telemetry::TelemetryLog>> =
-                                app_handle.state();
-                            if let Err(e) = commands::speak_now(
-                                app_handle.clone(),
-                                config,
-                                player,
-                                history,
-                                telemetry_state,
-                                None,
-                            )
-                            .await
-                            {
-                                log::error!("Failed to speak from hotkey: {}", e);
-                            }
-                        });
-                    }
-                })
-                .build(),
-        )
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::set_config,
             commands::reset_config,
+            commands::set_active_profile,
             commands::config_exists,
             commands::speak_now,
             commands::replay_cached,
@@ -640,6 +795,7 @@ fn main() {
             commands::skip_forward,
             commands::skip_backward,
             commands::set_playback_speed,
+            commands::set_playback_state,
             commands::get_playback_state,
             commands::set_listening,
             commands::get_listening,
@@ -651,6 +807,8 @@ fn main() {
             commands::get_history,
             commands::clear_history,
             commands::test_tts_engine,
+            commands::test_tts_engine_config,
+            commands::test_local_engine,
             commands::check_command_exists,
             commands::check_elevenlabs_credentials,
             commands::check_cartesia_credentials,
@@ -658,6 +816,9 @@ fn main() {
             commands::has_engine_credentials,
             commands::check_groq_credentials,
             commands::list_elevenlabs_voices,
+            commands::list_tts_engines,
+            commands::list_tts_voices,
+            commands::list_post_processing_models,
             commands::get_elevenlabs_voice_by_id,
             commands::get_elevenlabs_output_formats,
             commands::get_queue_state,
@@ -695,18 +856,29 @@ fn main() {
             commands::delete_history_batch,
             commands::play_history_batch,
             commands::trigger_update_check,
-            // Profiles
-            commands::set_active_profile,
-            commands::speak_now_with_profile,
-            // Engine catalog & installers
-            commands::list_tts_engines,
-            commands::list_tts_voices,
+            commands::get_installer_script_path,
+            commands::run_kittentts_installer,
             commands::install_engine,
-            commands::test_tts_engine_config,
-            commands::test_local_engine,
-            // Post-processing models
-            commands::list_post_processing_models,
+            commands::get_local_piper_voices,
+            commands::unload_piper_model,
+            commands::get_piper_server_status,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running CopySpeak");
+        .build(tauri::generate_context!())
+        .expect("error while building CopySpeak TTS");
+
+    app.run(|_app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            log::info!("App exiting, cleaning up TTS servers");
+            let _ = crate::tts::cli::unload_piper_model_internal();
+            crate::tts::local_tts_server::unload_all();
+
+            // Flush telemetry to disk on exit
+            let telemetry_state = _app_handle.state::<std::sync::Mutex<telemetry::TelemetryLog>>();
+            let lock_result = telemetry_state.lock();
+            if let Ok(telemetry) = lock_result {
+                log::info!("Flushing telemetry to disk...");
+                telemetry::save(&telemetry);
+            }
+        }
+    });
 }

@@ -2,7 +2,8 @@
 name = "copyspeak"
 version = "0.1.10"
 edition = "2021"
-description = "CopySpeak - AI text-to-speech orchestrator"
+rust-version = "1.87"
+description = "Simple and configurable TTS orchestrator for Windows"
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
@@ -15,9 +16,9 @@ tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rodio = "0.19"
-tokio = { version = "1", features = ["process", "fs", "sync", "time"] }
-dirs = "5"
-windows = { version = "0.58", features = [
+tokio = { version = "1", features = ["process", "fs", "sync", "time", "macros"] }
+dirs = "6"
+windows = { version = "0.62", features = [
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_Threading",
@@ -31,18 +32,27 @@ windows = { version = "0.58", features = [
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
 log = "0.4"
-flexi_logger = { version = "0.29", features = ["compress"] }
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+flexi_logger = { version = "0.31", features = ["compress"] }
+reqwest = { version = "0.13", features = ["blocking", "json"] }
 base64 = "0.22"
 regex = "1"
 lazy_static = "1"
+tempfile = "3"
+getrandom = "0.2"
+
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [target.'cfg(windows)'.dependencies]
-winreg = "0.52"
+winreg = "0.56"
 
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

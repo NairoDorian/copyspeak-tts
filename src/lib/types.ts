@@ -104,6 +104,7 @@ export interface TtsConfig {
   command: string;
   args_template: string[];
   voice: string;
+  cuda?: boolean;
   openai: OpenAIConfig;
   elevenlabs: ElevenLabsConfig;
   cartesia: CartesiaConfig;
@@ -246,6 +247,8 @@ export interface PostProcessingConfig {
 export interface PlaybackConfig {
   on_retrigger: RetriggerMode;
   volume: number;
+  playback_speed: number;
+  pitch: number;
 }
 
 export type HudThemePreset = "dark" | "light" | "custom";
@@ -343,6 +346,11 @@ export interface HotkeyConfig {
 
 export type EffectId = "none" | "walkie_talkie" | "game_boy";
 
+export interface EffectsConfig {
+  enabled: boolean;
+  active_effect: EffectId;
+}
+
 export interface PostProcessConfig {
   enabled: boolean;
   api_key: string;
@@ -354,6 +362,7 @@ export interface AppConfig {
   trigger: TriggerConfig;
   tts: TtsConfig;
   playback: PlaybackConfig;
+  effects: EffectsConfig;
   hud: HudConfig;
   general: GeneralConfig;
   output: OutputConfig;
@@ -488,4 +497,22 @@ export interface HistoryState {
   is_loading: boolean;
   error: string | null;
   last_updated: number;
+}
+
+// Piper TTS model status
+export type PiperStatusPhase = "loading" | "warming_up" | "ready" | "stopped" | "error";
+
+export interface PiperStatusPayload {
+  phase: PiperStatusPhase;
+  model: string | null;
+  cuda: boolean;
+  error: string | null;
+}
+
+export interface PiperServerStatus {
+  running: boolean;
+  model: string | null;
+  port: number | null;
+  cuda: boolean;
+  ready: boolean;
 }

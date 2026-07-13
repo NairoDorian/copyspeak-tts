@@ -1,38 +1,36 @@
 use super::{TtsBackend, TtsError};
 use crate::config::CartesiaConfig;
 use reqwest::Client;
-use serde::Deserialize;
 use serde_json::json;
 
 const CARTESIA_TTS_URL: &str = "https://api.cartesia.ai/tts/bytes";
 const CARTESIA_VERSION: &str = "2024-06-10";
 
-/// Voice metadata from the Cartesia `/voices` API.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
-pub struct CartesiaVoice {
-    pub id: String,
-    pub name: Option<String>,
-    pub description: Option<String>,
-}
-
-impl Default for CartesiaVoice {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            name: None,
-            description: None,
-        }
-    }
+fn get_cartesia_client() -> &'static Client {
+    static CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            .pool_max_idle_per_host(2)
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .tcp_nodelay(true)
+            .tcp_keepalive(std::time::Duration::from_secs(60))
+            // Bounded deadlines — a hung request must not hold the global
+            // synthesis lock forever.
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .expect("Failed to create Cartesia HTTP client")
+    })
 }
 
 pub struct CartesiaTtsBackend {
     config: CartesiaConfig,
+    client: Client,
 }
 
 impl CartesiaTtsBackend {
     pub fn new(config: CartesiaConfig) -> Self {
-        Self { config }
+        Self { config, client: get_cartesia_client().clone() }
     }
 
     fn block_on_async<F, T>(f: F) -> T
@@ -47,44 +45,6 @@ impl CartesiaTtsBackend {
             }
         }
     }
-
-    /// Fetch available voices from the Cartesia API.
-    /// GET https://api.cartesia.ai/voices — returns the account's voice library.
-    /// On failure the caller falls back to the static catalog list.
-    pub fn list_voices(&self) -> Result<Vec<CartesiaVoice>, TtsError> {
-        let api_key = crate::secrets::resolve(&self.config.api_key, &["CARTESIA_API_KEY"]);
-        if api_key.trim().is_empty() {
-            return Err(TtsError::Unavailable("Cartesia API key is missing".into()));
-        }
-        let (status, body) = Self::block_on_async(async move {
-            let client = Client::new();
-            let response = client
-                .get("https://api.cartesia.ai/voices")
-                .header("X-API-Key", api_key)
-                .header("Cartesia-Version", CARTESIA_VERSION)
-                .header("Accept", "application/json")
-                .send()
-                .await
-                .map_err(|e| TtsError::Http(format!("Failed to fetch voices: {}", e)))?;
-            let status = response.status();
-            let body = response
-                .text()
-                .await
-                .map_err(|e| TtsError::Http(format!("Failed to read voices response: {}", e)))?;
-            Ok::<_, TtsError>((status, body))
-        })?;
-
-        if !status.is_success() {
-            return Err(TtsError::Http(format!(
-                "Cartesia API error {}: {}",
-                status,
-                body.chars().take(300).collect::<String>()
-            )));
-        }
-
-        serde_json::from_str::<Vec<CartesiaVoice>>(&body)
-            .map_err(|e| TtsError::Http(format!("Failed to parse voices response: {}", e)))
-    }
 }
 
 impl TtsBackend for CartesiaTtsBackend {
@@ -92,7 +52,7 @@ impl TtsBackend for CartesiaTtsBackend {
         "Cartesia"
     }
 
-    fn synthesize(&self, text: &str, voice: &str) -> Result<Vec<u8>, TtsError> {
+    fn synthesize(&self, text: &str, voice: &str, _speed: f32) -> Result<Vec<u8>, TtsError> {
         let body = json!({
             "model_id": self.config.model_id,
             "transcript": text,
@@ -102,7 +62,10 @@ impl TtsBackend for CartesiaTtsBackend {
             },
             "output_format": {
                 "container": self.config.output_format,
-                "encoding": "pcm_f32le",
+                // s16le halves download/IPC size vs f32le and yields format-1
+                // WAV that the app's own parser (envelope, duration, concat)
+                // accepts — float WAV is format 3, which it rejects.
+                "encoding": "pcm_s16le",
                 "sample_rate": 44100,
             },
         });
@@ -115,10 +78,11 @@ impl TtsBackend for CartesiaTtsBackend {
         );
 
         let start_time = std::time::Instant::now();
-        let api_key = crate::secrets::resolve(&self.config.api_key, &["CARTESIA_API_KEY"]);
+        let api_key = self.config.api_key.clone();
 
-        let response = Self::block_on_async(async {
-            let client = Client::new();
+        let response = {
+            let client = self.client.clone();
+            Self::block_on_async(async move {
             client
                 .post(CARTESIA_TTS_URL)
                 .header("X-API-Key", api_key)
@@ -127,7 +91,8 @@ impl TtsBackend for CartesiaTtsBackend {
                 .json(&body)
                 .send()
                 .await
-        })
+            })
+        }
         .map_err(|e| {
             log::error!(
                 "Cartesia TTS request failed after {:?}: {}",
@@ -168,10 +133,7 @@ impl TtsBackend for CartesiaTtsBackend {
     }
 
     fn health_check(&self) -> Result<(), TtsError> {
-        if crate::secrets::resolve(&self.config.api_key, &["CARTESIA_API_KEY"])
-            .trim()
-            .is_empty()
-        {
+        if self.config.api_key.trim().is_empty() {
             return Err(TtsError::Unavailable("Cartesia API key is missing".into()));
         }
         Ok(())

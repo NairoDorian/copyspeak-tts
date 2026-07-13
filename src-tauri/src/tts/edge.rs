@@ -44,7 +44,7 @@ impl TtsBackend for EdgeTtsBackend {
         "Edge-TTS"
     }
 
-    fn synthesize(&self, text: &str, voice: &str) -> Result<Vec<u8>, TtsError> {
+    fn synthesize(&self, text: &str, voice: &str, _speed: f32) -> Result<Vec<u8>, TtsError> {
         let input_path = Self::input_path();
         let output_path = Self::output_path();
 
@@ -141,7 +141,7 @@ impl TtsBackend for EdgeTtsBackend {
         // the binary exists, Python deps are intact, and the network endpoint
         // is reachable. Cheaper than a voice-list API call and catches more
         // failure modes.
-        self.synthesize("test", voice).map(|_| ())
+        self.synthesize("test", voice, 1.0).map(|_| ())
     }
 
     fn file_extension(&self) -> &str {

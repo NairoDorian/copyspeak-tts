@@ -65,8 +65,11 @@
     },
     playback: {
       on_retrigger: "interrupt",
-      volume: 100
+      volume: 100,
+      playback_speed: 1.0,
+      pitch: 1.0
     },
+    effects: { enabled: true, active_effect: "none" },
     hud: {
       enabled: false,
       position: "bottom-right",
@@ -153,7 +156,9 @@
   } | null>(null);
 
   let unlistenTruncated: (() => void) | null = null;
-  let unlistenConfig: (() => void) | null = null;
+  let unlistenConfigChanged: (() => void) | null = null;
+  // Snapshot of the last loaded/saved config — gates the auto-save effect
+  let lastSavedJson: string | null = null;
 
   // Proxy store state for template readability
   let isPlaying = $derived(playbackStore.isPlaying);
@@ -162,19 +167,14 @@
   // Sync playback config to store and auto-save (debounced)
   $effect(() => {
     if (config) {
-      const c = config;
-      const { volume } = c.playback;
-      const hotkeyEnabled = c.hotkey.enabled;
-      const hotkeyShortcut = c.hotkey.shortcut;
-      const activeProfile = c.tts.profiles.find((p) => p.id === c.tts.active_profile_id);
-      const activeEffect = activeProfile?.effects?.enabled
-        ? activeProfile.effects.active_effect
-        : "none";
-      const speed = activeProfile?.speed ?? 1.0;
-      const pitch = activeProfile?.pitch ?? 1.0;
+      const { volume, playback_speed, pitch } = config.playback;
+      const activeEffect = config.effects?.enabled ? config.effects.active_effect : "none";
+      const safeVolume = Number.isFinite(volume) ? volume : 100;
+      const safeSpeed = Number.isFinite(playback_speed) ? playback_speed : 1.0;
+      const safePitch = Number.isFinite(pitch) ? pitch : 1.0;
 
       // Keep playback store in sync so audio plays at correct settings
-      playbackStore.syncPlaybackConfig(volume, speed, pitch, activeEffect);
+      playbackStore.syncPlaybackConfig(safeVolume, safeSpeed, safePitch, activeEffect);
 
       // ponytail: skip auto-save when config was loaded externally (config-changed event)
       // to break the reload → save → emit → reload loop
@@ -183,10 +183,18 @@
         return;
       }
 
+      // Only persist real user edits. A fresh load (or config-changed reload)
+      // matches the snapshot — so mounting the page doesn't rewrite
+      // config.json, and this stale copy can't silently revert changes saved
+      // by other components (e.g. the footer's engine switcher).
+      const serialized = JSON.stringify(config);
+      if (serialized === lastSavedJson) return;
+
       const timeout = setTimeout(async () => {
         if (isTauri) {
           try {
             await invoke("set_config", { newConfig: config });
+            lastSavedJson = serialized;
           } catch {
             // Ignore save errors
           }
@@ -204,6 +212,7 @@
     if (external) externalLoad = true;
     try {
       config = await invoke<AppConfig>("get_config");
+      lastSavedJson = JSON.stringify(config);
     } catch (e) {
       error = `Failed to load config: ${e}`;
       config = mockConfig;
@@ -307,7 +316,7 @@
 
     if (isTauri) {
       try {
-        unlistenConfig = await listen("config-changed", async () => {
+        unlistenConfigChanged = await listen("config-changed", async () => {
           await loadConfig(true);
         });
       } catch {}
@@ -328,12 +337,21 @@
           setTimeout(() => (truncationWarning = null), 5000);
         });
       } catch {}
+
+      try {
+        // Reload when another component persists config so this page's copy
+        // never goes stale (loadConfig resets the snapshot, so the reload
+        // itself doesn't retrigger a save).
+        unlistenConfigChanged = await listen("config-changed", () => {
+          void loadConfig();
+        });
+      } catch {}
     }
   });
 
   onDestroy(() => {
     if (unlistenTruncated) unlistenTruncated();
-    if (unlistenConfig) unlistenConfig();
+    if (unlistenConfigChanged) unlistenConfigChanged();
   });
 </script>
 

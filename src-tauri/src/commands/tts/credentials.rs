@@ -13,18 +13,16 @@ pub struct CredentialCheckResult {
 }
 
 /// Validate an ElevenLabs API key via GET /v1/user (no synthesis credits consumed).
+/// Async + spawn_blocking so the network roundtrip never blocks the main thread.
 #[tauri::command]
-pub fn check_elevenlabs_credentials(
+pub async fn check_elevenlabs_credentials(
     config: State<'_, Mutex<AppConfig>>,
 ) -> Result<CredentialCheckResult, String> {
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] check_elevenlabs_credentials called");
     }
 
-    let api_key = crate::secrets::resolve(
-        &config.lock().unwrap().tts.elevenlabs.api_key,
-        &["ELEVENLABS_API_KEY"],
-    );
+    let api_key = crate::lock_or_recover!(config).tts.elevenlabs.api_key.clone();
 
     if api_key.trim().is_empty() {
         return Ok(CredentialCheckResult {
@@ -34,6 +32,7 @@ pub fn check_elevenlabs_credentials(
         });
     }
 
+    tokio::task::spawn_blocking(move || {
     let client = reqwest::blocking::Client::new();
     match client
         .get("https://api.elevenlabs.io/v1/user")
@@ -63,21 +62,22 @@ pub fn check_elevenlabs_credentials(
             error_type: Some("http_error".into()),
         }),
     }
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 /// Validate a Cartesia API key via GET /voices (no synthesis credits consumed).
+/// Async + spawn_blocking so the network roundtrip never blocks the main thread.
 #[tauri::command]
-pub fn check_cartesia_credentials(
+pub async fn check_cartesia_credentials(
     config: State<'_, Mutex<AppConfig>>,
 ) -> Result<CredentialCheckResult, String> {
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] check_cartesia_credentials called");
     }
 
-    let api_key = crate::secrets::resolve(
-        &config.lock().unwrap().tts.cartesia.api_key,
-        &["CARTESIA_API_KEY"],
-    );
+    let api_key = crate::lock_or_recover!(config).tts.cartesia.api_key.clone();
 
     if api_key.trim().is_empty() {
         return Ok(CredentialCheckResult {
@@ -87,6 +87,7 @@ pub fn check_cartesia_credentials(
         });
     }
 
+    tokio::task::spawn_blocking(move || {
     let client = reqwest::blocking::Client::new();
     match client
         .get("https://api.cartesia.ai/voices")
@@ -117,11 +118,12 @@ pub fn check_cartesia_credentials(
             error_type: Some("http_error".into()),
         }),
     }
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
-/// Check whether an engine has credentials available (config.json or .env),
-/// without making any HTTP requests. Used by the UI to hide the "set up
-/// credentials" hint when .env already supplies the key.
+/// Returns true if the given engine has credentials configured.
 #[tauri::command]
 pub fn has_engine_credentials(engine: String, config: State<'_, Mutex<AppConfig>>) -> bool {
     let cfg = config.lock().unwrap();
@@ -150,18 +152,16 @@ pub fn has_engine_credentials(engine: String, config: State<'_, Mutex<AppConfig>
 }
 
 /// Validate an OpenAI API key via GET /v1/models (no synthesis credits consumed).
+/// Async + spawn_blocking so the network roundtrip never blocks the main thread.
 #[tauri::command]
-pub fn check_openai_credentials(
+pub async fn check_openai_credentials(
     config: State<'_, Mutex<AppConfig>>,
 ) -> Result<CredentialCheckResult, String> {
     if crate::logging::is_debug_mode() {
         log::debug!("[IPC] check_openai_credentials called");
     }
 
-    let api_key = crate::secrets::resolve(
-        &config.lock().unwrap().tts.openai.api_key,
-        &["OPENAI_API_KEY"],
-    );
+    let api_key = crate::lock_or_recover!(config).tts.openai.api_key.clone();
 
     if api_key.trim().is_empty() {
         return Ok(CredentialCheckResult {
@@ -171,6 +171,7 @@ pub fn check_openai_credentials(
         });
     }
 
+    tokio::task::spawn_blocking(move || {
     let client = reqwest::blocking::Client::new();
     match client
         .get("https://api.openai.com/v1/models")
@@ -200,4 +201,7 @@ pub fn check_openai_credentials(
             error_type: Some("http_error".into()),
         }),
     }
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }

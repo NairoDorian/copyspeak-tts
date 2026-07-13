@@ -1,4 +1,4 @@
-use super::{TtsBackend, TtsError, Voice};
+use super::{TtsBackend, TtsError};
 use crate::config::ElevenLabsConfig;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -8,9 +8,11 @@ use serde_json::json;
 /// https://elevenlabs.io/docs/api-reference/text-to-speech
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[allow(non_camel_case_types)]
+#[derive(Default)]
 pub enum ElevenLabsOutputFormat {
     /// MP3 format, 44.1kHz, 128kbps (default, good quality)
     #[serde(rename = "mp3_44100_128")]
+    #[default]
     Mp3_44100_128,
     /// MP3 format, 44.1kHz, 192kbps (higher quality)
     #[serde(rename = "mp3_44100_192")]
@@ -44,11 +46,6 @@ pub enum ElevenLabsOutputFormat {
     Mulaw_8000,
 }
 
-impl Default for ElevenLabsOutputFormat {
-    fn default() -> Self {
-        ElevenLabsOutputFormat::Mp3_44100_128
-    }
-}
 
 impl ElevenLabsOutputFormat {
     /// Get the format identifier string for API requests
@@ -83,26 +80,6 @@ impl ElevenLabsOutputFormat {
             }
             ElevenLabsOutputFormat::Flac_44100 => "audio/flac",
             ElevenLabsOutputFormat::Mulaw_8000 => "audio/mulaw",
-        }
-    }
-
-    /// Check if this format can be decoded by rodio
-    #[allow(dead_code)]
-    pub fn is_playable_by_rodio(&self) -> bool {
-        match self {
-            // MP3, WAV (PCM), FLAC, and OGG Vorbis are supported by rodio
-            ElevenLabsOutputFormat::Mp3_44100_128
-            | ElevenLabsOutputFormat::Mp3_44100_192
-            | ElevenLabsOutputFormat::Mp3_44100_32
-            | ElevenLabsOutputFormat::Mp3_22050_32
-            | ElevenLabsOutputFormat::Pcm_44100
-            | ElevenLabsOutputFormat::Pcm_22050
-            | ElevenLabsOutputFormat::Pcm_16000
-            | ElevenLabsOutputFormat::OggVorbis_44100
-            | ElevenLabsOutputFormat::OggVorbis_22050
-            | ElevenLabsOutputFormat::Flac_44100 => true,
-            // MULAW is not directly supported by rodio
-            ElevenLabsOutputFormat::Mulaw_8000 => false,
         }
     }
 
@@ -144,6 +121,7 @@ impl ElevenLabsOutputFormat {
 /// Voice information from ElevenLabs API
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct ElevenLabsVoice {
     pub voice_id: String,
     pub name: Option<String>,
@@ -153,18 +131,6 @@ pub struct ElevenLabsVoice {
     pub preview_url: Option<String>,
 }
 
-impl Default for ElevenLabsVoice {
-    fn default() -> Self {
-        Self {
-            voice_id: String::new(),
-            name: None,
-            category: None,
-            labels: None,
-            description: None,
-            preview_url: None,
-        }
-    }
-}
 
 /// Voice settings for ElevenLabs TTS
 #[derive(Debug, Clone, Serialize)]
@@ -188,13 +154,31 @@ impl Default for VoiceSettings {
     }
 }
 
+fn get_elevenlabs_client() -> &'static Client {
+    static CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            .pool_max_idle_per_host(2)
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .tcp_nodelay(true)
+            .tcp_keepalive(std::time::Duration::from_secs(60))
+            // Bounded deadlines — a hung request must not hold the global
+            // synthesis lock forever.
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .expect("Failed to create ElevenLabs HTTP client")
+    })
+}
+
 pub struct ElevenLabsTtsBackend {
     config: ElevenLabsConfig,
+    client: Client,
 }
 
 impl ElevenLabsTtsBackend {
     pub fn new(config: ElevenLabsConfig) -> Self {
-        Self { config }
+        Self { config, client: get_elevenlabs_client().clone() }
     }
 
     /// Execute an async block using the current Tokio runtime if available,
@@ -222,10 +206,7 @@ impl ElevenLabsTtsBackend {
     pub fn list_voices(&self) -> Result<Vec<ElevenLabsVoice>, TtsError> {
         log::debug!("ElevenLabs - fetching available voices");
 
-        if crate::secrets::resolve(&self.config.api_key, &["ELEVENLABS_API_KEY"])
-            .trim()
-            .is_empty()
-        {
+        if self.config.api_key.trim().is_empty() {
             log::error!("ElevenLabs - API key is missing");
             return Err(TtsError::Unavailable(
                 "ElevenLabs API key is missing".into(),
@@ -248,15 +229,15 @@ impl ElevenLabsTtsBackend {
     /// Internal method to fetch voices from API
     fn list_voices_internal(&self) -> Result<Vec<ElevenLabsVoice>, TtsError> {
         let url = "https://api.elevenlabs.io/v1/voices";
-        let api_key = crate::secrets::resolve(&self.config.api_key, &["ELEVENLABS_API_KEY"]);
+        let api_key = self.config.api_key.clone();
 
         let start_time = std::time::Instant::now();
 
         // Perform the full request-response cycle in one block to avoid body truncation
         // that occurs when .send() and .bytes() are split across separate block_on_async calls.
-        let fetch_result: Result<(reqwest::StatusCode, Vec<u8>), TtsError> =
+        let fetch_result: Result<(reqwest::StatusCode, Vec<u8>), TtsError> = {
+            let client = self.client.clone();
             Self::block_on_async(async move {
-                let client = Client::new();
                 let response = client
                     .get(url)
                     .header("xi-api-key", api_key)
@@ -271,7 +252,8 @@ impl ElevenLabsTtsBackend {
                 })?;
 
                 Ok((status, body.to_vec()))
-            });
+            })
+        };
 
         let (status, response_bytes) = fetch_result.map_err(|e| {
             let elapsed = start_time.elapsed();
@@ -437,10 +419,7 @@ impl ElevenLabsTtsBackend {
             return Ok(voice.clone());
         }
 
-        if crate::secrets::resolve(&self.config.api_key, &["ELEVENLABS_API_KEY"])
-            .trim()
-            .is_empty()
-        {
+        if self.config.api_key.trim().is_empty() {
             log::error!("ElevenLabs - API key is missing");
             return Err(TtsError::Unavailable(
                 "ElevenLabs API key is missing".into(),
@@ -465,16 +444,16 @@ impl ElevenLabsTtsBackend {
     /// Internal method to fetch a single voice by ID from API
     fn get_voice_by_id_internal(&self, voice_id: &str) -> Result<ElevenLabsVoice, TtsError> {
         let url = format!("https://api.elevenlabs.io/v1/voices/{}", voice_id);
-        let api_key = crate::secrets::resolve(&self.config.api_key, &["ELEVENLABS_API_KEY"]);
+        let api_key = self.config.api_key.clone();
         let voice_id_owned = voice_id.to_string();
 
         let start_time = std::time::Instant::now();
 
         // Perform the full request-response cycle in one block to avoid body truncation
         // that occurs when .send() and .bytes() are split across separate block_on_async calls.
-        let fetch_result: Result<(reqwest::StatusCode, String), TtsError> =
+        let fetch_result: Result<(reqwest::StatusCode, String), TtsError> = {
+            let client = self.client.clone();
             Self::block_on_async(async move {
-                let client = Client::new();
                 let response = client
                     .get(&url)
                     .header("xi-api-key", api_key)
@@ -490,7 +469,8 @@ impl ElevenLabsTtsBackend {
                     .map_err(|e| TtsError::Http(format!("Failed to read voice response: {}", e)))?;
 
                 Ok((status, body))
-            });
+            })
+        };
 
         let (status, body) = fetch_result.map_err(|e| {
             let elapsed = start_time.elapsed();
@@ -536,31 +516,6 @@ impl ElevenLabsTtsBackend {
 
         Ok(voice)
     }
-
-    /// Convert ElevenLabs voices to generic Voice structs
-    #[allow(dead_code)]
-    pub fn get_voices(&self) -> Result<Vec<Voice>, TtsError> {
-        let voices = self.list_voices()?;
-        Ok(voices
-            .into_iter()
-            .map(|v| Voice {
-                id: v.voice_id.clone(),
-                name: v.name.clone().unwrap_or_else(|| v.voice_id.clone()),
-                language: v.labels.as_ref().and_then(|l| {
-                    l.get("language")
-                        .and_then(|lang| lang.as_str().map(|s| s.to_string()))
-                }),
-                default: None,
-            })
-            .collect())
-    }
-
-    /// Resolve voice ID to human-readable name (lowercase) for display and filenames.
-    /// Uses static lookup only (no API call) to avoid runtime issues during synthesis.
-    #[allow(dead_code)]
-    pub fn resolve_voice_name(&self, voice_id: &str) -> String {
-        Self::resolve_voice_name_static(voice_id)
-    }
 }
 
 impl TtsBackend for ElevenLabsTtsBackend {
@@ -583,7 +538,10 @@ impl TtsBackend for ElevenLabsTtsBackend {
         }
     }
 
-    fn synthesize(&self, text: &str, _voice: &str) -> Result<Vec<u8>, TtsError> {
+    fn synthesize(&self, text: &str, _voice: &str, _speed: f32) -> Result<Vec<u8>, TtsError> {
+        // Note: _speed parameter is ignored as ElevenLabs API doesn't support direct speed control
+        // Speed adjustment should be done at playback level via audio player
+
         log::info!(
             "ElevenLabs TTS request - voice: {}, model: {}, format: {}, text length: {} chars",
             self.config.voice_id,
@@ -593,8 +551,9 @@ impl TtsBackend for ElevenLabsTtsBackend {
         );
 
         let url = format!(
-            "https://api.elevenlabs.io/v1/text-to-speech/{}",
-            self.config.voice_id
+            "https://api.elevenlabs.io/v1/text-to-speech/{}?output_format={}",
+            self.config.voice_id,
+            self.config.output_format.as_str()
         );
 
         let body = json!({
@@ -615,24 +574,24 @@ impl TtsBackend for ElevenLabsTtsBackend {
             );
         }
 
-        let api_key = crate::secrets::resolve(&self.config.api_key, &["ELEVENLABS_API_KEY"]);
+        let api_key = self.config.api_key.clone();
         let mime_type = self.config.output_format.mime_type();
-        let output_format = self.config.output_format.as_str();
 
         let start_time = std::time::Instant::now();
 
-        let response = Self::block_on_async(async {
-            let client = Client::new();
+        let response = {
+            let client = self.client.clone();
+            Self::block_on_async(async move {
             client
                 .post(&url)
                 .header("xi-api-key", api_key)
                 .header("Content-Type", "application/json")
                 .header("Accept", mime_type)
-                .query(&[("output_format", output_format)])
                 .json(&body)
                 .send()
                 .await
-        })
+            })
+        }
         .map_err(|e| {
             let elapsed = start_time.elapsed();
             log::error!("ElevenLabs TTS request failed after {:?}: {}", elapsed, e);
@@ -687,10 +646,7 @@ impl TtsBackend for ElevenLabsTtsBackend {
     fn health_check(&self) -> Result<(), TtsError> {
         log::debug!("ElevenLabs TTS health check - validating API key");
 
-        if crate::secrets::resolve(&self.config.api_key, &["ELEVENLABS_API_KEY"])
-            .trim()
-            .is_empty()
-        {
+        if self.config.api_key.trim().is_empty() {
             log::error!("ElevenLabs TTS health check failed - API key is missing");
             return Err(TtsError::Unavailable(
                 "ElevenLabs API key is missing".into(),
@@ -728,13 +684,5 @@ mod tests {
             "audio/mpeg"
         );
         assert_eq!(ElevenLabsOutputFormat::Pcm_44100.mime_type(), "audio/pcm");
-    }
-
-    #[test]
-    fn test_output_format_is_playable_by_rodio() {
-        assert!(ElevenLabsOutputFormat::Mp3_44100_128.is_playable_by_rodio());
-        assert!(ElevenLabsOutputFormat::Pcm_44100.is_playable_by_rodio());
-        assert!(ElevenLabsOutputFormat::Flac_44100.is_playable_by_rodio());
-        assert!(!ElevenLabsOutputFormat::Mulaw_8000.is_playable_by_rodio());
     }
 }

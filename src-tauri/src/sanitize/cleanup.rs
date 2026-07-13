@@ -14,15 +14,22 @@ pub(crate) fn cleanup_artifacts(text: &str) -> String {
         static ref MULTI_NEWLINE: Regex = Regex::new(r"\n{3,}").unwrap();
     }
 
-    let mut result = text.to_string();
-
-    // Run core cleanup twice to catch cascading artifacts
-    for _ in 0..2 {
-        result = MULTI_SPACE.replace_all(&result, " ").to_string();
+    fn apply_cleanup_pass(text: &str) -> String {
+        let mut result = MULTI_SPACE.replace_all(text, " ").to_string();
         result = SPACE_BEFORE_PUNCT.replace_all(&result, "$1").to_string();
         result = REPEATED_COMMA.replace_all(&result, ",").to_string();
         result = COMMA_BEFORE_PERIOD.replace_all(&result, ".").to_string();
         result = PUNCT_NO_SPACE.replace_all(&result, "$1 $2").to_string();
+        result
+    }
+
+    let mut result = text.to_string();
+
+    // Run cleanup; re-run once more only if text actually changed
+    result = apply_cleanup_pass(&result);
+    let second_pass = apply_cleanup_pass(&result);
+    if second_pass != result {
+        result = second_pass;
     }
 
     // Remove trailing comma
@@ -209,8 +216,7 @@ The project is valued at **100M** with 5k users. Cost is €50 per unit & ~10% p
             !result.contains("> "),
             "Should not contain blockquote markers"
         );
-        // Inline code is preserved by default (strip_inline_code=false)
-        assert!(result.contains('`'), "Inline code should be preserved by default");
+        assert!(!result.contains('`'), "Should not contain code markers");
         assert!(!result.contains("https://"), "Should not contain URLs");
         assert!(result.contains("for example"), "Should expand 'e.g.'");
         assert!(result.contains("approximately"), "Should expand '~'");

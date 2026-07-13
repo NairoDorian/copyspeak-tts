@@ -56,7 +56,7 @@ impl TtsBackend for MicrosoftTtsBackend {
         "Microsoft MAI-Voice-2"
     }
 
-    fn synthesize(&self, text: &str, voice: &str) -> Result<Vec<u8>, TtsError> {
+    fn synthesize(&self, text: &str, voice: &str, _speed: f32) -> Result<Vec<u8>, TtsError> {
         let api_key = crate::secrets::resolve(
             &self.config.api_key,
             &["MICROSOFT_API_KEY", "AZURE_API_KEY"],

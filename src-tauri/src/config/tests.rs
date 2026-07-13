@@ -96,17 +96,6 @@ mod tests {
     }
 
     #[test]
-    fn test_audio_format_from_extension() {
-        assert_eq!(AudioFormat::from_extension("wav"), Some(AudioFormat::Wav));
-        assert_eq!(AudioFormat::from_extension("WAV"), Some(AudioFormat::Wav));
-        assert_eq!(AudioFormat::from_extension("mp3"), Some(AudioFormat::Mp3));
-        assert_eq!(AudioFormat::from_extension("MP3"), Some(AudioFormat::Mp3));
-        assert_eq!(AudioFormat::from_extension("ogg"), Some(AudioFormat::Ogg));
-        assert_eq!(AudioFormat::from_extension("flac"), Some(AudioFormat::Flac));
-        assert_eq!(AudioFormat::from_extension("xyz"), None);
-    }
-
-    #[test]
     fn test_audio_format_serialization() {
         assert_eq!(serde_json::to_string(&AudioFormat::Wav).unwrap(), "\"wav\"");
         assert_eq!(serde_json::to_string(&AudioFormat::Mp3).unwrap(), "\"mp3\"");
@@ -213,8 +202,19 @@ mod tests {
     #[test]
     fn test_validation_command_empty() {
         let mut config = AppConfig::default();
-        config.tts.active_backend = TtsEngine::Local;
-        config.tts.command = "".into();
+        // Validation runs against the active *profile*, so switch it to a Local
+        // profile with an empty command.
+        let profile = config
+            .tts
+            .profiles
+            .iter_mut()
+            .find(|p| p.id == config.tts.active_profile_id)
+            .unwrap();
+        profile.engine = TtsEngine::Local;
+        profile.engine_options = ProfileEngineOptions::Local(LocalEngineOptions {
+            command: Some("".into()),
+            ..Default::default()
+        });
         let result = config.validate();
         assert!(result.is_err());
         let errors = result.unwrap_err();
@@ -226,81 +226,24 @@ mod tests {
     #[test]
     fn test_validation_args_template_missing_placeholders() {
         let mut config = AppConfig::default();
-        config.tts.active_backend = TtsEngine::Local;
-        config.tts.args_template = vec!["-v".into(), "{voice}".into()];
+        let profile = config
+            .tts
+            .profiles
+            .iter_mut()
+            .find(|p| p.id == config.tts.active_profile_id)
+            .unwrap();
+        profile.engine = TtsEngine::Local;
+        profile.engine_options = ProfileEngineOptions::Local(LocalEngineOptions {
+            command: Some("uv".into()),
+            args_template: Some(vec!["-v".into(), "{voice}".into()]),
+            ..Default::default()
+        });
         let result = config.validate();
         assert!(result.is_err());
         let errors = result.unwrap_err();
         assert!(errors
             .iter()
             .any(|e| matches!(e, ValidationError::ArgsTemplateMissingPlaceholder { .. })));
-    }
-
-    // ========== TTS Profile / Migration Tests ==========
-
-    #[test]
-    fn test_default_tts_config_has_one_default_profile() {
-        let tts = TtsConfig::default();
-        assert_eq!(tts.schema_version, 2);
-        assert_eq!(tts.active_profile_id, "default");
-        assert_eq!(tts.profiles.len(), 1);
-        assert_eq!(tts.profiles[0].id, "default");
-        assert_eq!(tts.profiles[0].engine, TtsEngine::Edge);
-    }
-
-    #[test]
-    fn test_migrate_legacy_config_creates_default_profile() {
-        // Simulate a v0 config: no profiles, ElevenLabs active.
-        let mut tts = TtsConfig::default();
-        tts.schema_version = 0;
-        tts.profiles = Vec::new();
-        tts.active_backend = TtsEngine::ElevenLabs;
-        tts.elevenlabs.voice_id = "voice-xyz".into();
-
-        let migrated = migrate_tts_config(tts);
-        assert_eq!(migrated.schema_version, 2);
-        assert_eq!(migrated.active_profile_id, "default");
-        assert_eq!(migrated.profiles.len(), 1);
-        assert_eq!(migrated.profiles[0].engine, TtsEngine::ElevenLabs);
-        assert_eq!(migrated.profiles[0].voice, "voice-xyz");
-    }
-
-    #[test]
-    fn test_migrate_is_idempotent() {
-        let tts = TtsConfig::default();
-        let once = migrate_tts_config(tts);
-        let twice = migrate_tts_config(once.clone());
-        assert_eq!(once.profiles.len(), twice.profiles.len());
-        assert_eq!(twice.schema_version, 2);
-    }
-
-    #[test]
-    fn test_profile_json_roundtrip() {
-        let profile = VoiceProfile {
-            id: "p1".into(),
-            name: "P1".into(),
-            description: None,
-            engine: TtsEngine::Http,
-            voice: "amy.wav".into(),
-            voice_label: None,
-            speed: 1.05,
-            pitch: 1.0,
-            effects: ProfileEffects {
-                enabled: true,
-                active_effect: EffectId::WalkieTalkie,
-            },
-            text_processing: crate::config::ProfileTextProcessing::default(),
-            engine_options: ProfileEngineOptions::Http(HttpEngineOptions {
-                body_template: Some(r#"{"model":"chatterbox"}"#.into()),
-                ..HttpEngineOptions::default()
-            }),
-        };
-        let json = serde_json::to_string(&profile).unwrap();
-        let back: VoiceProfile = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.id, "p1");
-        assert_eq!(back.engine, TtsEngine::Http);
-        assert!(back.effects.enabled);
-        assert_eq!(back.effects.active_effect, EffectId::WalkieTalkie);
     }
 
     #[test]

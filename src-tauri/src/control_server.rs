@@ -2,6 +2,7 @@ use crate::audio::AudioPlayer;
 use crate::config::{self, AppConfig, EffectId, TtsEngine};
 use crate::history::HistoryLog;
 use crate::telemetry;
+use crate::tts::cli;
 use serde::Deserialize;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -22,6 +23,7 @@ struct SpeakRequest {
 
 enum ControlRequest {
     Health,
+    PiperStatus,
     Speak(SpeakRequest),
 }
 
@@ -71,8 +73,21 @@ fn handle_connection(mut stream: TcpStream, app: AppHandle) {
         }
     };
 
-    let response = match read_result.and_then(|()| parse_request(&buffer)) {
-        Ok(ControlRequest::Health) => http_response(200, "OK", r#"{"ok":true,"app":"CopySpeak"}"#),
+    let control_token = app
+        .state::<Mutex<AppConfig>>()
+        .lock()
+        .ok()
+        .and_then(|cfg| cfg.general.control_token.clone());
+
+    let response = match read_result.and_then(|()| parse_request(&buffer, &control_token)) {
+        Ok(ControlRequest::Health) => {
+            http_response(200, "OK", r#"{"ok":true,"app":"CopySpeak TTS"}"#)
+        }
+        Ok(ControlRequest::PiperStatus) => {
+            let status = cli::get_piper_server_status();
+            let body = serde_json::to_string(&status).unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string());
+            http_response(200, "OK", &body)
+        }
         Ok(ControlRequest::Speak(request)) => {
             match tauri::async_runtime::block_on(speak(app.clone(), request)) {
                 Ok(()) => http_response(200, "OK", r#"{"ok":true}"#),
@@ -82,7 +97,7 @@ fn handle_connection(mut stream: TcpStream, app: AppHandle) {
                 }
             }
         }
-        Err((status, message)) => http_response(status, "Error", &json_error(&message)),
+        Err((status, message)) => http_response(status, if status == 401 { "Unauthorized" } else { "Error" }, &json_error(&message)),
     };
 
     let _ = stream.write_all(response.as_bytes());
@@ -126,16 +141,54 @@ fn content_length(headers: &str) -> Option<usize> {
         .and_then(|(_, value)| value.trim().parse::<usize>().ok())
 }
 
-fn parse_request(buffer: &[u8]) -> Result<ControlRequest, (u16, String)> {
+fn parse_request(buffer: &[u8], expected_token: &Option<String>) -> Result<ControlRequest, (u16, String)> {
     let header_end = find_header_end(buffer).ok_or((400, "missing HTTP headers".to_string()))?;
     let headers = String::from_utf8_lossy(&buffer[..header_end]);
+
+    // Determine the route first so we can exempt /health from auth
     let mut lines = headers.lines();
     let request_line = lines.next().unwrap_or_default();
+
+    // GET /health is unauthenticated — external liveness probes are its purpose
     if request_line.starts_with("GET /health ") {
         return Ok(ControlRequest::Health);
     }
+
+    // Extract Authorization header for gated routes
+    let auth_header = headers
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("authorization"))
+        .map(|(_, value)| value.trim());
+
+    // Check token if one is configured (for /speak and /piper-status)
+    if let Some(token) = expected_token {
+        let expected = format!("Bearer {token}");
+        match auth_header {
+            Some(auth) => {
+                // Constant-time compare: byte-wise XOR fold over the common
+                // prefix, plus an untruncated length check (an `as u8` cast
+                // here would accept lengths differing by multiples of 256).
+                let mut diff = 0u8;
+                for (a, b) in auth.bytes().zip(expected.bytes()) {
+                    diff |= a ^ b;
+                }
+                if auth.len() != expected.len() {
+                    diff |= 1;
+                }
+                if diff != 0 {
+                    return Err((401, "Unauthorized: invalid or missing token".to_string()));
+                }
+            }
+            None => return Err((401, "Unauthorized: invalid or missing token".to_string())),
+        }
+    }
+
+    if request_line.starts_with("GET /piper-status ") {
+        return Ok(ControlRequest::PiperStatus);
+    }
     if !request_line.starts_with("POST /speak ") {
-        return Err((404, "expected GET /health or POST /speak".to_string()));
+        return Err((404, "expected GET /health, GET /piper-status, or POST /speak".to_string()));
     }
 
     let content_length = content_length(&headers).unwrap_or(0);
@@ -190,7 +243,9 @@ async fn speak(app: AppHandle, request: SpeakRequest) -> Result<(), String> {
             request.text
         };
         if text.chars().count() > cfg.trigger.max_text_length as usize {
-            text.chars().take(cfg.trigger.max_text_length as usize).collect()
+            text.chars()
+                .take(cfg.trigger.max_text_length as usize)
+                .collect()
         } else {
             text
         }

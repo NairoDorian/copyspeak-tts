@@ -17,11 +17,13 @@ pub(super) fn strip_markdown(text: &str, config: &crate::config::MarkdownSanitiz
     if config.strip_headers {
         result = strip_headers(&result);
     }
-    if config.strip_bold_italic {
-        result = strip_bold_italic(&result);
-    }
+    // Lists before bold/italic: stripping emphasis first deletes '*' bullet
+    // markers, so '*' list items would never get their terminal period.
     if config.strip_lists {
         result = strip_lists(&result);
+    }
+    if config.strip_bold_italic {
+        result = strip_bold_italic(&result);
     }
     if config.strip_blockquotes {
         result = strip_blockquotes(&result);
@@ -68,7 +70,7 @@ fn strip_headers(text: &str) -> String {
 
 fn strip_bold_italic(text: &str) -> String {
     let result = text.replace("**", "").replace("__", "");
-    result.replace('*', "").replace('_', "")
+    result.replace(['*', '_'], "")
 }
 
 fn strip_lists(text: &str) -> String {
