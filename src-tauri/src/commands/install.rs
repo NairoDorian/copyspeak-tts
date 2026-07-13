@@ -94,10 +94,14 @@ pub fn install_engine(engine: String) -> Result<(), String> {
                 .spawn()
         };
 
-        if spawn("pwsh.exe").is_err() {
-            log::warn!("pwsh.exe unavailable, falling back to powershell.exe");
-            spawn("powershell.exe").map_err(|e| format!("Failed to launch installer: {e}"))?;
-        }
+        let shell = if has_working_pwsh() {
+            "pwsh.exe"
+        } else {
+            "powershell.exe"
+        };
+
+        log::info!("Using shell '{shell}' to launch installer");
+        spawn(shell).map_err(|e| format!("Failed to launch installer: {e}"))?;
         Ok(())
     }
 
@@ -105,5 +109,14 @@ pub fn install_engine(engine: String) -> Result<(), String> {
     {
         let _ = script_str;
         Err("Engine installers are Windows-only.".into())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn has_working_pwsh() -> bool {
+    if let Ok(output) = Command::new("pwsh.exe").arg("--version").output() {
+        output.status.success()
+    } else {
+        false
     }
 }
