@@ -21,6 +21,8 @@ src-tauri/Cargo.lock
 /.gemini
 /archive
 /original_copyspeak
+/devlog.*
+/devrun.*
 /.agent
 /Handy
 .vercel
