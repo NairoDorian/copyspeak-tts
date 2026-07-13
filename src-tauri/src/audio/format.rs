@@ -2,6 +2,7 @@
 
 use crate::config::{AudioFormat, FormatConfig};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Check if ffmpeg is available on the system.
 pub fn check_ffmpeg_available() -> Result<(), String> {
@@ -52,9 +53,12 @@ pub fn convert_audio_format(
 
     // Create temp files for input and output
     let temp_dir = std::env::temp_dir();
-    let input_path = temp_dir.join("copyspeak_convert_input.wav");
+    static CONVERT_SEQ: AtomicU64 = AtomicU64::new(0);
+    let tag = format!("{}_{}", std::process::id(), CONVERT_SEQ.fetch_add(1, Ordering::Relaxed));
+    let input_path = temp_dir.join(format!("copyspeak_convert_input_{}.wav", tag));
     let output_path = temp_dir.join(format!(
-        "copyspeak_convert_output.{}",
+        "copyspeak_convert_output_{}.{}",
+        tag,
         format_config.format.default_extension()
     ));
 
@@ -110,10 +114,10 @@ pub fn convert_audio_format(
 
         match e.kind() {
             std::io::ErrorKind::NotFound => {
-                format!("Audio conversion failed: output file not created by ffmpeg. Check ffmpeg installation.")
+                "Audio conversion failed: output file not created by ffmpeg. Check ffmpeg installation.".to_string()
             }
             std::io::ErrorKind::PermissionDenied => {
-                format!("Permission denied reading converted audio file. Check file system permissions.")
+                "Permission denied reading converted audio file. Check file system permissions.".to_string()
             }
             _ => {
                 format!("Failed to read converted audio file: {}. The conversion may have failed.", e)

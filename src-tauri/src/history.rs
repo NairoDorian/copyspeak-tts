@@ -133,7 +133,6 @@ impl Default for HistoryLog {
     }
 }
 
-#[allow(dead_code)]
 impl HistoryLog {
     pub fn new() -> Self {
         let now = Utc::now();
@@ -202,6 +201,11 @@ impl HistoryLog {
                 // Remove file tracking for removed entry
                 if let Some(ref path) = removed.output_path {
                     self.unlink_file(path);
+                    // Without this, evicted entries' audio is orphaned forever
+                    // (the orphan scan never sees the storage directories).
+                    if let Err(e) = std::fs::remove_file(path) {
+                        log::debug!("Could not remove evicted audio '{}': {}", path, e);
+                    }
                 }
                 // Update counters
                 if removed.success {
@@ -294,13 +298,6 @@ impl HistoryLog {
         Some((entries.first()?.timestamp, entries.last()?.timestamp))
     }
 
-    /// Update file size tracking
-    #[allow(dead_code)]
-    pub fn update_file_size(&mut self, _file_path: &str, size_bytes: u64) {
-        self.metadata.file_tracking.total_file_size_bytes += size_bytes;
-        self.metadata.file_tracking.last_updated = Utc::now();
-    }
-
     /// Link a file path to a history entry with metadata
     pub fn link_file_to_entry(
         &mut self,
@@ -345,33 +342,12 @@ impl HistoryLog {
         self.get_by_id(entry_id)
     }
 
-    /// Get a mutable history entry by its file path
-    pub fn get_entry_by_file_path_mut(&mut self, file_path: &str) -> Option<&mut HistoryEntry> {
-        let entry_id = self
-            .metadata
-            .file_tracking
-            .file_to_entry
-            .get(file_path)?
-            .clone();
-        self.entries_mut().iter_mut().find(|e| e.id == entry_id)
-    }
-
     /// Get file metadata for a history entry
     pub fn get_file_metadata(&self, entry_id: &str) -> Option<&FileMetadata> {
         self.metadata
             .file_tracking
             .entry_file_metadata
             .get(entry_id)
-    }
-
-    /// Get file path for a history entry
-    pub fn get_file_path(&self, entry_id: &str) -> Option<&String> {
-        self.metadata
-            .file_tracking
-            .file_to_entry
-            .iter()
-            .find(|(_, id)| *id == entry_id)
-            .map(|(path, _)| path)
     }
 
     /// Check if a file path is tracked in history
@@ -483,12 +459,20 @@ impl HistoryLog {
         }
 
         if let Ok(entries) = std::fs::read_dir(&history_dir) {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    if let Some(path) = entry.path().to_str() {
-                        if !self.is_file_tracked(path) && entry.path().is_file() {
-                            orphaned.push(path.to_string());
-                        }
+            for entry in entries.flatten() {
+                let p = entry.path();
+                // Never treat exports (json/csv) or in-progress temp files as
+                // orphaned audio — cleanup would silently delete user data.
+                let is_data_file = p.extension().and_then(|e| e.to_str()).is_some_and(|ext| {
+                    let ext = ext.to_ascii_lowercase();
+                    ext == "json" || ext == "csv" || ext == "tmp"
+                });
+                if is_data_file {
+                    continue;
+                }
+                if let Some(path) = p.to_str() {
+                    if !self.is_file_tracked(path) && p.is_file() {
+                        orphaned.push(path.to_string());
                     }
                 }
             }
@@ -510,31 +494,6 @@ impl HistoryLog {
         missing
     }
 
-    /// Get total size of tracked files in a human-readable format
-    pub fn get_total_file_size_human(&self) -> String {
-        let bytes = self.metadata.file_tracking.total_file_size_bytes;
-        format_file_size(bytes)
-    }
-
-    /// Get file size for a specific entry
-    pub fn get_entry_file_size(&self, entry_id: &str) -> Option<u64> {
-        self.get_file_metadata(entry_id)
-            .map(|metadata| metadata.size_bytes)
-    }
-
-    /// Update file format for a history entry
-    pub fn update_file_format(&mut self, entry_id: &str, format: &str) {
-        if let Some(metadata) = self
-            .metadata
-            .file_tracking
-            .entry_file_metadata
-            .get_mut(entry_id)
-        {
-            metadata.format = Some(format.to_string());
-            self.metadata.file_tracking.last_updated = Utc::now();
-        }
-    }
-
     /// Get statistics about current entries
     pub fn get_statistics(&self) -> HistoryStatistics {
         let total = self.entries.len();
@@ -554,24 +513,6 @@ impl HistoryLog {
             unique_engines_count: self.metadata.unique_engines.len(),
             file_size_bytes: self.metadata.file_tracking.total_file_size_bytes,
         }
-    }
-}
-
-/// Format file size in bytes to human-readable format
-#[allow(dead_code)]
-fn format_file_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = 1024 * KB;
-    const GB: u64 = 1024 * MB;
-
-    if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.2} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} B", bytes)
     }
 }
 
@@ -615,7 +556,9 @@ pub fn load() -> HistoryLog {
     }
 }
 
-/// Save history to disk as JSON with pretty formatting
+/// Save history to disk as JSON with pretty formatting.
+/// Write-then-rename so a crash mid-write can't truncate the file (the loader
+/// silently starts fresh on parse errors, wiping all entries).
 pub fn save(history: &HistoryLog) -> Result<(), String> {
     let path = history_path();
     if let Some(parent) = path.parent() {
@@ -624,73 +567,30 @@ pub fn save(history: &HistoryLog) -> Result<(), String> {
     }
     let json =
         serde_json::to_string_pretty(history).map_err(|e| format!("Serialize error: {e}"))?;
-    std::fs::write(&path, json).map_err(|e| format!("Write error: {e}"))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json).map_err(|e| format!("Write error: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("Rename error: {e}"))?;
     Ok(())
 }
 
-/// Generate a unique history entry ID
+/// Generate a unique history entry ID.
+/// The monotonic counter keeps IDs unique even for entries created within the
+/// same millisecond (queued fragments are added back-to-back).
 fn generate_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let random = (timestamp as u64)
-        .wrapping_mul(6364136223846793005)
-        .wrapping_add(1442695040888963407)
-        & 0xFFFFFFFF;
-    format!("hist_{}_{:x}", timestamp, random)
+    format!("hist_{}_{:x}", timestamp, SEQ.fetch_add(1, Ordering::Relaxed))
 }
 
-/// Create a new history entry with complete metadata
-#[allow(dead_code)]
-pub fn create_entry(text: &str, tts_engine: &str, voice: &str, speed: f32) -> HistoryEntry {
-    HistoryEntry {
-        id: generate_id(),
-        timestamp: Utc::now(),
-        text: text.to_string(),
-        text_length: text.len() as u32,
-        tts_engine: tts_engine.to_string(),
-        voice: voice.to_string(),
-        speed,
-        output_format: None,
-        output_path: None,
-        duration_ms: 0,
-        batch_id: None,
-        app_name: None,
-        source: None,
-        filters_applied: Vec::new(),
-        success: false,
-        error_message: None,
-        attempts: 0,
-        tags: Vec::new(),
-        metadata: HashMap::new(),
-    }
-}
-
-/// Add a new entry to the history with basic info
-#[allow(dead_code)]
-pub fn add_entry(
-    history: &Mutex<HistoryLog>,
-    text: &str,
-    tts_engine: &str,
-    voice: &str,
-    duration_ms: u64,
-    output_path: Option<String>,
-) {
-    add_entry_with_batch(
-        history,
-        text,
-        tts_engine,
-        voice,
-        duration_ms,
-        output_path,
-        None,
-        HashMap::new(),
-    );
-}
-
-/// Add a new entry to the history with batch info and metadata
+/// Add a new entry to the history with batch info and metadata.
+/// If `skip_save` is true, the entry is added in memory but the log is
+/// NOT persisted to disk (caller must save once after all entries).
+#[allow(clippy::too_many_arguments)]
 pub fn add_entry_with_batch(
     history: &Mutex<HistoryLog>,
     text: &str,
@@ -700,6 +600,7 @@ pub fn add_entry_with_batch(
     output_path: Option<String>,
     batch_id: Option<String>,
     metadata: HashMap<String, serde_json::Value>,
+    skip_save: bool,
 ) {
     let entry = HistoryEntry {
         id: generate_id(),
@@ -723,26 +624,20 @@ pub fn add_entry_with_batch(
         metadata,
     };
 
-    let mut hist = history.lock().unwrap();
+    let mut hist = crate::lock_or_recover!(history);
     hist.add(entry);
 
-    if let Err(e) = save(&hist) {
-        log::error!("Failed to save history: {}", e);
+    if !skip_save {
+        if let Err(e) = save(&hist) {
+            log::error!("Failed to save history: {}", e);
+        }
     }
-}
-
-/// Add a complete entry with all metadata
-#[allow(dead_code)]
-pub fn add_entry_complete(history: &Mutex<HistoryLog>, entry: HistoryEntry) -> Result<(), String> {
-    let mut hist = history.lock().unwrap();
-    hist.add(entry);
-    save(&hist)
 }
 
 /// Cleanup orphaned history files not referenced in the current history log
 pub fn cleanup_orphaned_files(history: &Mutex<HistoryLog>) -> Result<usize, String> {
     let orphaned_files = {
-        let hist = history.lock().unwrap();
+        let hist = crate::lock_or_recover!(history);
         hist.get_orphaned_files()
     };
 
@@ -768,7 +663,7 @@ pub fn cleanup_old_entries(
     history: &Mutex<HistoryLog>,
     auto_delete_mode: &crate::config::AutoDeleteMode,
 ) -> Result<usize, String> {
-    let mut hist = history.lock().unwrap();
+    let mut hist = crate::lock_or_recover!(history);
     let initial_count = hist.entries().len();
 
     let mut files_to_remove: Vec<String> = Vec::new();
@@ -783,7 +678,7 @@ pub fn cleanup_old_entries(
             if initial_count > max_entries {
                 // Sort by timestamp descending (latest first) to safely keep latest
                 let mut entries: Vec<HistoryEntry> = hist.entries().iter().cloned().collect();
-                entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+                entries.sort_by_key(|b| std::cmp::Reverse(b.timestamp));
 
                 // Identify files to remove from the older entries
                 for entry in entries.iter().skip(max_entries) {
@@ -796,7 +691,7 @@ pub fn cleanup_old_entries(
                 entries.truncate(max_entries);
 
                 // Re-sort back to ascending for the circular buffer
-                entries.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+                entries.sort_by_key(|a| a.timestamp);
 
                 let mut new_deque = VecDeque::with_capacity(crate::history::MAX_ENTRIES);
                 for e in entries {
@@ -826,6 +721,12 @@ pub fn cleanup_old_entries(
     hist.metadata.total_entries_current = hist.entries().len() as u32;
     hist.metadata.last_modified = Utc::now();
 
+    // Keep file-tracking maps in sync with the removed entries (mirrors the
+    // unlink done by the circular-buffer eviction in add()).
+    for file_path in &files_to_remove {
+        hist.unlink_file(file_path);
+    }
+
     drop(hist);
 
     for file_path in files_to_remove {
@@ -835,7 +736,7 @@ pub fn cleanup_old_entries(
     }
 
     if entries_removed > 0 {
-        let hist = history.lock().unwrap();
+        let hist = crate::lock_or_recover!(history);
         save(&hist)?;
         log::info!(
             "Removed {} old history entries due to auto-delete mode",
@@ -878,23 +779,25 @@ pub fn run_full_cleanup(
 /// - Optionally removes orphaned files (if cleanup_orphaned_files is true)
 pub fn start_cleanup_service(app_handle: tauri::AppHandle) {
     std::thread::spawn(move || {
-        let cleanup_interval = std::time::Duration::from_secs(24 * 3600);
+        const CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+        const INITIAL_DELAY: std::time::Duration = std::time::Duration::from_secs(30);
         let mut first_run = true;
 
-        log::info!("History background cleanup service started");
+        log::info!("History background cleanup service started (first run in 30s)");
 
         loop {
-            // Skip delay on first run to execute cleanup immediately on startup
+            // Defer first cleanup to avoid disk I/O during app startup
             if first_run {
+                std::thread::sleep(INITIAL_DELAY);
                 first_run = false;
             } else {
-                std::thread::sleep(cleanup_interval);
+                std::thread::sleep(CLEANUP_INTERVAL);
             }
 
             // Re-read config to pick up any changes
             let (should_cleanup_orphaned, auto_delete_mode) = {
                 let config: tauri::State<std::sync::Mutex<config::AppConfig>> = app_handle.state();
-                let cfg = config.lock().unwrap();
+                let cfg = crate::lock_or_recover!(config);
                 (
                     cfg.history.cleanup_orphaned_files,
                     cfg.history.auto_delete.clone(),
@@ -948,7 +851,7 @@ pub fn save_audio_to_storage(
 
     let dir: std::path::PathBuf = match config.storage_mode {
         crate::config::StorageMode::Temp => {
-            std::env::temp_dir().join("CopySpeak_Generations").into()
+            std::env::temp_dir().join("CopySpeak_Generations")
         }
         crate::config::StorageMode::Persistent => {
             config.persistent_dir.clone().unwrap_or_else(|| {

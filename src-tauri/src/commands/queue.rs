@@ -10,7 +10,7 @@ use super::PaginationEvent;
 /// Get the current fragment queue state.
 #[tauri::command]
 pub fn get_queue_state(queue: State<'_, Mutex<FragmentQueue>>) -> QueueState {
-    let q = queue.lock().unwrap();
+    let q = crate::lock_or_recover!(queue);
     QueueState {
         status: q.status(),
         current_index: q.current_index(),
@@ -22,7 +22,7 @@ pub fn get_queue_state(queue: State<'_, Mutex<FragmentQueue>>) -> QueueState {
 /// Get the list of fragments in the queue.
 #[tauri::command]
 pub fn get_queue_fragments(queue: State<'_, Mutex<FragmentQueue>>) -> Vec<TextFragment> {
-    let q = queue.lock().unwrap();
+    let q = crate::lock_or_recover!(queue);
     q.fragments()
 }
 
@@ -33,7 +33,7 @@ pub fn skip_to_fragment(
     queue: State<'_, Mutex<FragmentQueue>>,
     index: usize,
 ) -> Result<(), String> {
-    let q = queue.lock().unwrap();
+    let q = crate::lock_or_recover!(queue);
     let total = q.len();
     let is_paginated = total > 1;
     q.skip_to(index)?;
@@ -54,7 +54,7 @@ pub fn skip_to_fragment(
 /// Stop fragment queue playback.
 #[tauri::command]
 pub fn stop_queue(app: AppHandle, queue: State<'_, Mutex<FragmentQueue>>) -> Result<(), String> {
-    let q = queue.lock().unwrap();
+    let q = crate::lock_or_recover!(queue);
     let total = q.len();
     let current_index = q.current_index().unwrap_or(0);
     let is_paginated = total > 1;
@@ -76,7 +76,7 @@ pub fn stop_queue(app: AppHandle, queue: State<'_, Mutex<FragmentQueue>>) -> Res
 /// Clear fragment queue.
 #[tauri::command]
 pub fn clear_queue(app: AppHandle, queue: State<'_, Mutex<FragmentQueue>>) -> Result<(), String> {
-    let q = queue.lock().unwrap();
+    let q = crate::lock_or_recover!(queue);
     let total = q.len();
     let current_index = q.current_index().unwrap_or(0);
     let is_paginated = total > 1;
