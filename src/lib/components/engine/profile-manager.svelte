@@ -109,6 +109,14 @@
       for (const entry of entries) {
         next[entry.engine as TtsEngine] = entry.voices;
       }
+      try {
+        const localVoices = (await invoke("list_tts_voices", { engine: "local" })) as VoiceCatalogEntry[];
+        if (localVoices.length > 0) {
+          next["local"] = localVoices;
+        }
+      } catch (e) {
+        console.warn("Failed to auto-fetch local voices:", e);
+      }
       voicesByEngine = next;
     } catch (err) {
       toast.error(`Could not load engine catalog: ${err}`);
