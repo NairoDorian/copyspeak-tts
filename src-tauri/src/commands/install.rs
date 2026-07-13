@@ -7,11 +7,6 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
-
-#[cfg(target_os = "windows")]
-const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 
 /// Map a CopySpeak engine id to its installer script filename under `scripts/`.
 fn installer_script_for(engine: &str) -> Result<&'static str, String> {
@@ -77,12 +72,17 @@ pub fn install_engine(engine: String) -> Result<(), String> {
             script = script_str
         );
 
-        // ponytail: CREATE_NEW_CONSOLE gives the installer its own window so
-        // it doesn't share the parent's (dev terminal) stdout. The wrapper
-        // above pauses for a keypress on both success and failure.
+        // ponytail: launch via cmd /c start so that the console handles are
+        // completely detached. This avoids inheriting standard stream pipes
+        // redirected by terminal dev runners, ensuring a visible, interactive
+        // console window is created.
         let spawn = |exe: &str| {
-            Command::new(exe)
+            Command::new("cmd")
                 .args([
+                    "/c",
+                    "start",
+                    "",
+                    exe,
                     "-ExecutionPolicy",
                     "Bypass",
                     "-WindowStyle",
@@ -90,7 +90,6 @@ pub fn install_engine(engine: String) -> Result<(), String> {
                     "-Command",
                     &wrapper,
                 ])
-                .creation_flags(CREATE_NEW_CONSOLE)
                 .spawn()
         };
 
