@@ -106,6 +106,13 @@ export const LOCAL_PRESETS: EngineSetupEntry[] = [
     installerId: "chatterbox",
     credential: "none",
     docsUrl: "https://github.com/resemble-ai/chatterbox"
+  },
+  {
+    id: "pocket",
+    kind: "local",
+    installerId: "pocket",
+    credential: "none",
+    docsUrl: "https://github.com/kyutai-labs/pocket-tts"
   }
 ];
 
