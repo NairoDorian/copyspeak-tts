@@ -137,7 +137,10 @@ pub fn test_tts_engine_config(
 /// `engine` is the preset id from the Engines page: piper | kokoro | kitten |
 /// chatterbox.
 #[tauri::command]
-pub fn test_local_engine(engine: String) -> Result<TtsHealthResult, String> {
+pub fn test_local_engine(
+    config: State<'_, Mutex<AppConfig>>,
+    engine: String,
+) -> Result<TtsHealthResult, String> {
     let spec = match local_engine_spec(&engine) {
         Some(s) => s,
         None => {
@@ -148,7 +151,11 @@ pub fn test_local_engine(engine: String) -> Result<TtsHealthResult, String> {
             });
         }
     };
-    let backend = CliTtsBackend::new(spec.command.clone(), spec.args_template.clone());
+    let cuda = {
+        let cfg = config.lock().unwrap();
+        cfg.tts.cuda
+    };
+    let backend = CliTtsBackend::new(spec.command.clone(), spec.args_template.clone(), cuda, engine.clone());
     let backend_name = format!("Local ({})", engine);
 
     log::info!(

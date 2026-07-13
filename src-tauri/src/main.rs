@@ -273,8 +273,12 @@ fn main() {
     // Load .env (next to copyspeak.exe) before any backend reads credentials.
     secrets::load_dotenv();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .setup(|app| {
+            // --- Set background server app handles ---
+            crate::tts::piper_server::set_piper_app_handle(app.handle().clone());
+            crate::tts::local_tts_server::set_local_tts_app_handle(app.handle().clone());
+
             // --- Load config ---
             let cfg = config::load_or_default();
             app.manage(std::sync::Mutex::new(cfg));
@@ -704,9 +708,23 @@ fn main() {
             commands::install_engine,
             commands::test_tts_engine_config,
             commands::test_local_engine,
+            commands::get_data_dir,
+            commands::get_home_dir,
+            commands::unload_piper_model,
+            commands::get_piper_server_status,
             // Post-processing models
             commands::list_post_processing_models,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running CopySpeak");
+        ]);
+
+    let app = builder
+        .build(tauri::generate_context!())
+        .expect("error while building CopySpeak");
+
+    app.run(|_app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            log::info!("App exiting, cleaning up TTS servers");
+            let _ = crate::tts::cli::unload_piper_model_internal();
+            crate::tts::local_tts_server::unload_all();
+        }
+    });
 }

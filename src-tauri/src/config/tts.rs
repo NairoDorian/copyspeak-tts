@@ -384,6 +384,8 @@ pub struct LocalEngineOptions {
     pub command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub args_template: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cuda: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -760,6 +762,8 @@ pub struct TtsConfig {
     pub active_profile_id: String,
     #[serde(default)]
     pub profiles: Vec<VoiceProfile>,
+    #[serde(default)]
+    pub cuda: bool,
 
     // Legacy fields — kept for deserialization of old configs, skipped on serialize.
     // Migration (v0→v2) copies what's needed into profiles.
@@ -866,6 +870,7 @@ impl Default for TtsConfig {
                 default_cartesia_profile(),
                 default_google_profile(),
             ],
+            cuda: false,
             preset: "kitten-tts".into(),
             command: "uv".into(),
             args_template: vec![

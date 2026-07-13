@@ -51,6 +51,8 @@ pub(crate) fn create_backend(active: &TtsEngine, tts_config: &TtsConfig) -> Box<
         TtsEngine::Local => Box::new(CliTtsBackend::new(
             tts_config.command.clone(),
             tts_config.args_template.clone(),
+            tts_config.cuda,
+            tts_config.preset.clone(),
         )),
         TtsEngine::OpenAI => Box::new(crate::tts::openai::OpenAiTtsBackend::new(
             tts_config.openai.clone(),
@@ -90,7 +92,13 @@ pub(crate) fn create_backend_from_effective(
                 .and_then(|o| o.args_template.clone())
                 .filter(|items| !items.is_empty())
                 .unwrap_or_else(|| tts_config.args_template.clone());
-            Box::new(CliTtsBackend::new(command, args_template))
+            let cuda = opts
+                .and_then(|o| o.cuda)
+                .unwrap_or(tts_config.cuda);
+            let preset = opts
+                .and_then(|o| o.preset.clone())
+                .unwrap_or_else(|| tts_config.preset.clone());
+            Box::new(CliTtsBackend::new(command, args_template, cuda, preset))
         }
         TtsEngine::OpenAI => {
             let mut config = tts_config.openai.clone();

@@ -16,6 +16,7 @@
   import { toast } from "svelte-sonner";
   import UpdateChecker from "../update-checker.svelte";
   import { _ } from "svelte-i18n";
+  import { piperStore } from "$lib/stores/piper-store.svelte";
 
   let isListening = $derived(listeningStore.isListening);
   let error = $derived(listeningStore.error);
@@ -165,6 +166,43 @@
           <span class="text-card-foreground truncate text-xs">
             {isListening ? $_("footer.listening") : $_("footer.paused")}
           </span>
+        {/if}
+
+        <!-- Piper model status indicator -->
+        {#if !piperStore.isStopped}
+          <span class="bg-border mx-0.5 h-3 w-px shrink-0"></span>
+          {#if piperStore.isLoading || piperStore.isWarmingUp}
+            <Spinner class="text-muted-foreground h-3 w-3 shrink-0" />
+            <span class="text-muted-foreground truncate text-[10px]">
+              {piperStore.statusLabel}
+            </span>
+          {:else if piperStore.isReady}
+            <div
+              class="h-2 w-2 shrink-0 rounded-full bg-green-500"
+              style="box-shadow: 0 0 5px rgba(34, 197, 94, 0.4);"
+              title="Model ready"
+            ></div>
+            <span class="text-muted-foreground truncate text-[10px]">
+              {piperStore.model ?? "Ready"}
+              {#if piperStore.cuda}
+                <span
+                  class="ml-0.5 rounded px-1 py-px text-[9px] font-medium"
+                  style="background: rgba(118, 208, 67, 0.15); color: #76d043;"
+                >
+                  CUDA
+                </span>
+              {/if}
+            </span>
+          {:else if piperStore.isError}
+            <div
+              class="h-2 w-2 shrink-0 rounded-full bg-red-500"
+              style="box-shadow: 0 0 5px rgba(239, 68, 68, 0.4);"
+              title={piperStore.error ?? "Model error"}
+            ></div>
+            <span class="text-destructive truncate text-[10px]">
+              {piperStore.statusLabel}
+            </span>
+          {/if}
         {/if}
       </div>
 

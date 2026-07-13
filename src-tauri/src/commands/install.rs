@@ -32,16 +32,18 @@ fn resolve_script(filename: &str) -> Result<PathBuf, String> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     // Dev: <repo>/scripts — CARGO_MANIFEST_DIR points at src-tauri.
-    // ponytail: baked at compile time; fine for dev/alpha, not for packaged
-    // installs. Bundle scripts as Tauri resources when distribution matters.
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    candidates.push(manifest.join("..").join("scripts").join(filename));
+    if let Some(repo_root) = manifest.parent() {
+        candidates.push(repo_root.join("scripts").join(filename));
+    }
 
     // Packaged: alongside the exe, or one dir up (resource dir layouts).
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             candidates.push(exe_dir.join("scripts").join(filename));
-            candidates.push(exe_dir.join("..").join("scripts").join(filename));
+            if let Some(parent_dir) = exe_dir.parent() {
+                candidates.push(parent_dir.join("scripts").join(filename));
+            }
         }
     }
 
@@ -71,7 +73,7 @@ pub fn install_engine(engine: String) -> Result<(), String> {
         // the user can read what went wrong. The "Press any key" prompt always
         // runs whether the installer threw or exited non-zero.
         let wrapper = format!(
-            r#"$ErrorActionPreference = 'Continue'; $code = 0; try {{ & '{script}' }} catch {{ $code = -1; Write-Host ''; Write-Host "ERROR: $_" -ForegroundColor Red }}; if ($LASTEXITCODE -ne 0 -and $code -eq 0) {{ $code = $LASTEXITCODE }}; Write-Host ''; if ($code -eq 0) {{ Write-Host 'Installer finished successfully.' -ForegroundColor Green }} else {{ Write-Host 'Installer finished with exit code:' $code -ForegroundColor Red }}; Write-Host ''; Write-Host 'Press any key to close...' -ForegroundColor Cyan; $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown'); exit $code"#,
+            r#"$ErrorActionPreference = 'Continue'; $code = 0; try {{ & '{script}' }} catch {{ $code = -1; Write-Host ''; Write-Host "ERROR: $_" -ForegroundColor Red }}; if ($LASTEXITCODE -ne 0 -and $code -eq 0) {{ $code = $LASTEXITCODE }}; Write-Host ''; if ($code -eq 0) {{ Write-Host 'Installer finished successfully.' -ForegroundColor Green }} else {{ Write-Host 'Installer finished with exit code:' $code -ForegroundColor Red }}; Write-Host ''; if ($Host.UI.RawUI) {{ Write-Host 'Press any key to close...' -ForegroundColor Cyan; $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown') }} else {{ Write-Host 'Press Enter to close...' -ForegroundColor Cyan; $null = Read-Host }}; exit $code"#,
             script = script_str
         );
 

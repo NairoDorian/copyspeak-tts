@@ -11,6 +11,8 @@ pub mod google;
 pub mod http;
 pub mod microsoft;
 pub mod openai;
+pub mod piper_server;
+pub mod local_tts_server;
 
 use thiserror::Error;
 
@@ -31,6 +33,9 @@ pub enum TtsError {
 
     #[error("HTTP error: {0}")]
     Http(String),
+
+    #[error("TTS server error: {0}")]
+    Server(String),
 }
 
 /// Metadata for a voice option exposed in the settings UI.

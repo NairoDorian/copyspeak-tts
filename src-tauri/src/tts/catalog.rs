@@ -109,6 +109,13 @@ pub fn list_engines() -> Vec<EngineCatalogEntry> {
                     "Argument template with {text}, {voice}, and {output} placeholders.",
                     serde_json::json!([]),
                 ),
+                option(
+                    "cuda",
+                    "CUDA GPU Acceleration",
+                    EngineOptionKind::Boolean,
+                    "Run on NVIDIA GPU (requires CUDA & onnxruntime-gpu).",
+                    serde_json::json!(false),
+                ),
             ],
             voices: vec![voice(
                 "Rosie",

@@ -15,18 +15,70 @@ use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+const PIPER_KNOWN_VOICES: &str = "amy, arctic, bryce, danny, hfc_female, hfc_male, joe, john, kathleen, kristin, kusal, l2arctic, lessac, libritts, libritts_r, ljspeech, norman, reza_ibrahim, ryan, sam";
+
+// H1/A2/H2/H5: All server state and startup logic moved to piper_server module.
+
+#[derive(serde::Serialize)]
+pub struct PiperServerStatus {
+    pub running: bool,
+    pub model: Option<String>,
+    pub port: Option<u16>,
+    pub cuda: bool,
+    pub ready: bool,
+}
+
+pub fn unload_piper_model_internal() -> bool {
+    crate::tts::piper_server::unload_piper_model()
+}
+
+pub fn restart_piper_server(command: String, voice: String, data_dir: String, cuda: bool) {
+    log::info!("[Piper] Restart requested — voice: {}, cuda: {}", voice, cuda);
+    let _ = crate::tts::piper_server::unload_piper_model();
+    prewarm_piper_server(command, voice, data_dir, cuda);
+}
+
+pub fn get_piper_server_status() -> PiperServerStatus {
+    crate::tts::piper_server::get_piper_server_status()
+}
+
+pub fn prewarm_piper_server(command: String, voice: String, data_dir: String, cuda: bool) {
+    std::thread::spawn(move || {
+        let _ = crate::tts::piper_server::ensure_running(command, voice, data_dir, cuda);
+    });
+}
+
+pub fn prewarm_local_server(engine: String, command: String, script_args: Vec<String>) {
+    crate::tts::local_tts_server::prewarm(engine, command, script_args);
+}
+
+pub fn unload_local_server(engine: &str) -> bool {
+    crate::tts::local_tts_server::unload(engine)
+}
+
+pub fn restart_local_server(engine: String, command: String, script_args: Vec<String>) {
+    log::info!(
+        "[LocalServer] Restart requested for {}",
+        engine
+    );
+    let _ = crate::tts::local_tts_server::unload(&engine);
+    crate::tts::local_tts_server::prewarm(engine, command, script_args);
+}
+
 #[cfg(windows)]
 pub(crate) fn get_expanded_path() -> String {
-    use std::collections::HashSet;
-    use std::env;
+    static EXPANDED_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    EXPANDED_PATH.get_or_init(|| {
+        use std::collections::HashSet;
+        use std::env;
 
-    let current_path = env::var("PATH").unwrap_or_default();
-    let mut paths: Vec<String> = current_path.split(';').map(|s| s.to_string()).collect();
-    let mut seen: HashSet<String> = paths.iter().cloned().collect();
+        let current_path = env::var("PATH").unwrap_or_default();
+        let mut paths: Vec<String> = current_path.split(';').map(|s| s.to_string()).collect();
+        let mut seen: HashSet<String> = paths.iter().cloned().collect();
 
-    let home = dirs::home_dir();
+        let home = dirs::home_dir();
 
-    let extra_paths: Vec<String> = vec![
+        let extra_paths: Vec<String> = vec![
         home.as_ref()
             .map(|h| h.join(".local").join("bin").to_string_lossy().into_owned()),
         home.as_ref().map(|h| {
@@ -144,7 +196,7 @@ pub(crate) fn get_expanded_path() -> String {
         Some(r"C:\Python310\Scripts".to_string()),
     ]
     .into_iter()
-    .filter_map(|p| p)
+    .flatten()
     .collect();
 
     for p in extra_paths {
@@ -155,18 +207,63 @@ pub(crate) fn get_expanded_path() -> String {
     }
 
     paths.join(";")
+    }).clone()
+}
+
+#[cfg(windows)]
+fn get_nvidia_dll_paths(python_executable: &str) -> Option<String> {
+    use std::sync::OnceLock;
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    static NVIDIA_PATHS: OnceLock<Option<String>> = OnceLock::new();
+
+    NVIDIA_PATHS
+        .get_or_init(|| {
+            // Enumerate every sub-directory of the `nvidia` namespace package that
+            // contains a `bin` folder. Forward-compatible with both CUDA 12 wheel
+            // layout (nvidia/<pkg>/bin/*.dll) and the CUDA 13 layout where all
+            // DLLs are consolidated under nvidia/cu13/bin/x86_64/*.dll.
+            // We collect both `bin` dirs and their immediate subdirectories.
+            let output = Command::new(python_executable)
+                .args([
+                    "-c",
+                    "import os, glob, nvidia; \
+                     nvidia_dir = list(nvidia.__path__)[0]; \
+                     bin_dirs = glob.glob(os.path.join(nvidia_dir, '*', 'bin')); \
+                     sub_dirs = glob.glob(os.path.join(nvidia_dir, '*', 'bin', '*')); \
+                     all_dirs = [p for p in bin_dirs + sub_dirs if os.path.isdir(p)]; \
+                     print(';'.join(all_dirs))"
+                ])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output()
+                .ok()?;
+
+            if output.status.success() {
+                let paths_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !paths_str.is_empty() {
+                    return Some(paths_str);
+                }
+            }
+            None
+        })
+        .clone()
 }
 
 pub struct CliTtsBackend {
     pub command: String,
     pub args_template: Vec<String>,
+    pub cuda: bool,
+    pub preset: String,
 }
 
 impl CliTtsBackend {
-    pub fn new(command: String, args_template: Vec<String>) -> Self {
+    pub fn new(command: String, args_template: Vec<String>, cuda: bool, preset: String) -> Self {
         Self {
             command,
             args_template,
+            cuda,
+            preset,
         }
     }
 
@@ -182,10 +279,58 @@ impl CliTtsBackend {
         is_kokoro && (!has_model_arg || !has_voices_arg)
     }
 
-    /// Check if this is piper TTS
+    /// Check if this is piper TTS — uses ground-truth preset, not a substring
+    /// heuristic over the command name (which could match "bagpiper", etc.).
     fn is_piper(&self) -> bool {
-        let cmd_lower = self.command.to_lowercase();
-        cmd_lower.contains("piper") || self.args_template.iter().any(|arg| arg.contains("piper"))
+        self.preset == "piper"
+    }
+
+    fn is_kokoro(&self) -> bool {
+        self.preset == "kokoro-tts"
+    }
+
+    fn is_kitten(&self) -> bool {
+        self.preset == "kitten-tts"
+    }
+
+    fn is_pocket(&self) -> bool {
+        self.preset == "pocket-tts"
+    }
+
+    fn local_server_engine(&self) -> Option<&str> {
+        if self.is_kokoro() {
+            Some("kokoro")
+        } else if self.is_kitten() {
+            Some("kitten")
+        } else if self.is_pocket() {
+            Some("pocket")
+        } else {
+            None
+        }
+    }
+
+    pub fn kokoro_model_args(&self) -> Vec<String> {
+        let mut args: Vec<String> = Vec::new();
+        if let Some((model_path, voices_path)) = self.find_kokoro_models() {
+            args.push("--model".to_string());
+            args.push(model_path);
+            args.push("--voices".to_string());
+            args.push(voices_path);
+        }
+        args
+    }
+
+    pub fn kitten_model_args(&self) -> Vec<String> {
+        // Extract --model from args_template if present
+        let model_idx = self.args_template.iter().position(|a| a == "--model");
+        if let Some(idx) = model_idx {
+            if let Some(val) = self.args_template.get(idx + 1) {
+                if val != "{raw_text}" && val != "{input}" && val != "{output}" {
+                    return vec!["--model".to_string(), val.clone()];
+                }
+            }
+        }
+        Vec::new()
     }
 
     /// Find kokoro-tts model files in common locations
@@ -195,6 +340,17 @@ impl CliTtsBackend {
 
         // Check common installation locations
         let search_paths = [
+            // Project root kokoro/ folder (dev environment)
+            std::env::current_dir().ok().map(|d| d.join("kokoro")),
+            // Project root relative to src-tauri/ (CARGO_MANIFEST_DIR)
+            Some(
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .map(|p| p.join("kokoro"))
+                    .unwrap_or_default(),
+            ),
+            // src-tauri/kokoro/ (adjacent to manifest)
+            Some(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("kokoro")),
             // Windows: pip user install
             dirs::home_dir().map(|h| h.join(".local").join("bin")),
             dirs::home_dir().map(|h| h.join("AppData").join("Local").join("bin")),
@@ -214,17 +370,15 @@ impl CliTtsBackend {
             Some(std::path::PathBuf::from("/opt/kokoro-tts")),
         ];
 
-        for path_opt in search_paths.iter() {
-            if let Some(base_path) = path_opt {
-                let model_path = base_path.join(model_name);
-                let voices_path = base_path.join(voices_name);
+        for base_path in search_paths.iter().flatten() {
+            let model_path = base_path.join(model_name);
+            let voices_path = base_path.join(voices_name);
 
-                if model_path.exists() && voices_path.exists() {
-                    return Some((
-                        model_path.to_string_lossy().to_string(),
-                        voices_path.to_string_lossy().to_string(),
-                    ));
-                }
+            if model_path.exists() && voices_path.exists() {
+                return Some((
+                    model_path.to_string_lossy().to_string(),
+                    voices_path.to_string_lossy().to_string(),
+                ));
             }
         }
 
@@ -285,27 +439,19 @@ impl CliTtsBackend {
             }
         }
 
+        // Auto-inject --cuda for piper if enabled
+        if self.is_piper() && self.cuda {
+            args.push("--cuda".to_string());
+        }
+
         args
     }
 
-    fn input_path() -> String {
-        let tmp = std::env::temp_dir();
-        tmp.join("copyspeak_tts_input.txt")
-            .to_string_lossy()
-            .into_owned()
-    }
-
-    fn output_path() -> String {
-        let tmp = std::env::temp_dir();
-        tmp.join("copyspeak_tts_out.wav")
-            .to_string_lossy()
-            .into_owned()
-    }
 
     /// Returns the Piper voices directory (e.g. C:\Users\<User>\piper-voices on Windows).
     /// Used to resolve the {data_dir} placeholder so TTS engines can locate model files
     /// stored in the user's home directory without requiring the user to enter a full path.
-    fn data_dir() -> String {
+    pub(crate) fn data_dir() -> String {
         dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
             .join("piper-voices")
@@ -333,6 +479,172 @@ impl CliTtsBackend {
             .to_string_lossy()
             .into_owned()
     }
+
+    fn synthesize_via_server(&self, text: &str, voice: &str) -> Result<Vec<u8>, TtsError> {
+        let data_dir = Self::data_dir();
+        let t_total = std::time::Instant::now();
+
+        // R6: Pre-flight check — verify the voice model exists before talking to
+        // the server. Piper's HTTP server silently falls back to its default voice
+        // (HTTP 200) for unknown voices, so without this check the user hears the
+        // wrong voice with no error.
+        let voice_stem = if voice.ends_with(".onnx") {
+            voice.trim_end_matches(".onnx").to_string()
+        } else {
+            voice.to_string()
+        };
+        let model_path = std::path::Path::new(&data_dir).join(format!("{}.onnx", voice_stem));
+        if !model_path.exists() && !std::path::Path::new(voice).exists() {
+            return Err(TtsError::CommandFailed(format!(
+                "Piper voice model not found: {voice}\n\n\
+                 Download it with:\n  python -m piper.download_voices {voice}\n\n\
+                 Then place the .onnx and .onnx.json files in:\n  {data_dir}",
+            )));
+        }
+
+        // 1. Ensure server is running and get handle
+        let handle = crate::tts::piper_server::ensure_running(
+            self.command.clone(),
+            voice.to_string(),
+            data_dir,
+            self.cuda,
+        ).map_err(TtsError::Server)?;
+
+        // 2. HTTP synthesis request
+        // Speed is a playback-only concept; always synthesize at 1.0 normal rate.
+        // The frontend applies speed via playbackRate on the <audio> element.
+        let url = format!("http://127.0.0.1:{}/", handle.port);
+        let body = serde_json::json!({ "text": text, "voice": voice, "length_scale": 1.0 });
+
+        // R3: Adaptive request deadline — scales with text length so legitimate
+        // long synthesis isn't killed, but a wedged server doesn't hold the queue
+        // forever (H2 improvement over connect-only timeout).
+        let text_chars = text.chars().count() as u64;
+        let per_char_ms = if self.cuda { 5 } else { 30 };
+        let deadline_ms = (5000u64 + text_chars * per_char_ms).clamp(10_000, 180_000);
+        let deadline = std::time::Duration::from_millis(deadline_ms);
+
+        let t_req = std::time::Instant::now();
+        let response = handle.client
+            .post(&url)
+            .timeout(deadline)
+            .json(&body)
+            .send()
+            .map_err(|e| {
+                // On abort the server was already unloaded and a fresh prewarm
+                // may be starting — don't cancel it with another unload.
+                if !crate::ABORT_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = crate::tts::piper_server::unload_piper_model();
+                }
+                TtsError::Server(format!("HTTP request failed: {}", e))
+            })?;
+        let req_ms = t_req.elapsed().as_millis();
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let err_text = response.text().unwrap_or_default();
+            return Err(TtsError::Server(format!("HTTP error {}: {}", status, err_text)));
+        }
+
+        let t_read = std::time::Instant::now();
+        let bytes = response
+            .bytes()
+            .map_err(|e| {
+                // R3: Mid-stream read error → dying server. Unload so next
+                // attempt gets a fresh process rather than talking to a zombie.
+                // (Skip on abort — the abort path already unloaded and may be
+                // prewarming a replacement.)
+                if !crate::ABORT_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = crate::tts::piper_server::unload_piper_model();
+                }
+                TtsError::Server(format!("Failed to read response bytes: {}", e))
+            })?
+            .to_vec();
+        let read_ms = t_read.elapsed().as_millis();
+
+        let total_ms = t_total.elapsed().as_millis();
+        log::info!(
+            "[Piper] Synth — total:{:.0}ms req:{:.0}ms read:{:.0}ms size:{}B chars:{} speed:1.0 voice:{} cuda:{}",
+            total_ms, req_ms, read_ms, bytes.len(), text.len(), voice, self.cuda
+        );
+
+        Ok(bytes)
+    }
+
+    fn synthesize_via_local_server(
+        &self,
+        engine: &str,
+        text: &str,
+        voice: &str,
+    ) -> Result<Vec<u8>, TtsError> {
+        let t_total = std::time::Instant::now();
+
+        let script_args = match engine {
+            "kokoro" => self.kokoro_model_args(),
+            "kitten" => self.kitten_model_args(),
+            _ => Vec::new(),
+        };
+
+        let handle = crate::tts::local_tts_server::ensure_running(
+            engine,
+            self.command.clone(),
+            script_args,
+        )
+        .map_err(TtsError::Server)?;
+
+        let url = format!("http://127.0.0.1:{}/", handle.port);
+        let body = serde_json::json!({ "text": text, "voice": voice, "length_scale": 1.0 });
+
+        let text_chars = text.chars().count() as u64;
+        let deadline_ms = (5000u64 + text_chars * 30).clamp(10_000, 180_000);
+        let deadline = std::time::Duration::from_millis(deadline_ms);
+
+        let t_req = std::time::Instant::now();
+        let response = handle
+            .client
+            .post(&url)
+            .timeout(deadline)
+            .json(&body)
+            .send()
+            .map_err(|e| {
+                if !crate::ABORT_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = crate::tts::local_tts_server::unload(engine);
+                }
+                TtsError::Server(format!("HTTP request failed: {}", e))
+            })?;
+        let req_ms = t_req.elapsed().as_millis();
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let err_text = response.text().unwrap_or_default();
+            return Err(TtsError::Server(format!(
+                "HTTP error {}: {}",
+                status, err_text
+            )));
+        }
+
+        let bytes = response
+            .bytes()
+            .map_err(|e| {
+                if !crate::ABORT_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = crate::tts::local_tts_server::unload(engine);
+                }
+                TtsError::Server(format!("Failed to read response bytes: {}", e))
+            })?
+            .to_vec();
+
+        let total_ms = t_total.elapsed().as_millis();
+        log::info!(
+            "[{}_server] Synth — total:{:.0}ms req:{:.0}ms size:{}B chars:{}",
+            engine,
+            total_ms,
+            req_ms,
+            bytes.len(),
+            text.len()
+        );
+
+        Ok(bytes)
+    }
 }
 
 impl TtsBackend for CliTtsBackend {
@@ -341,8 +653,70 @@ impl TtsBackend for CliTtsBackend {
     }
 
     fn synthesize(&self, text: &str, voice: &str) -> Result<Vec<u8>, TtsError> {
-        let input_path = Self::input_path();
-        let output_path = Self::output_path();
+        if self.is_piper() {
+            log::debug!("[Piper] Using persistent server — voice:{} cuda:{}", voice, self.cuda);
+            let synth_start = std::time::Instant::now();
+            match self.synthesize_via_server(text, voice) {
+                Ok(bytes) => {
+                    log::debug!("[Piper] Server synth done — {}B in {:.1}s", bytes.len(), synth_start.elapsed().as_secs_f64());
+                    return Ok(bytes);
+                }
+                Err(e) => {
+                    if crate::ABORT_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
+                        return Err(e);
+                    }
+                    log::warn!(
+                        "[Piper] Server synthesis failed: {}. Falling back to CLI.",
+                        e
+                    );
+                }
+            }
+        }
+
+        // Route Kitten/Kokoro/Pocket through persistent local HTTP server
+        if let Some(engine) = self.local_server_engine() {
+            log::debug!(
+                "[LocalServer] Using persistent {} server — voice:{}",
+                engine,
+                voice
+            );
+            let synth_start = std::time::Instant::now();
+            match self.synthesize_via_local_server(engine, text, voice) {
+                Ok(bytes) => {
+                    log::debug!(
+                        "[LocalServer] {} synth done — {}B in {:.1}s",
+                        engine,
+                        bytes.len(),
+                        synth_start.elapsed().as_secs_f64()
+                    );
+                    return Ok(bytes);
+                }
+                Err(e) => {
+                    if crate::ABORT_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
+                        return Err(e);
+                    }
+                    log::warn!(
+                        "[LocalServer] {} server synthesis failed: {}. Falling back to CLI.",
+                        engine,
+                        e
+                    );
+                }
+            }
+        }
+
+        let input_file = tempfile::Builder::new()
+            .prefix("copyspeak_tts_input_")
+            .suffix(".txt")
+            .tempfile()
+            .map_err(TtsError::Io)?;
+        let output_file = tempfile::Builder::new()
+            .prefix("copyspeak_tts_out_")
+            .suffix(".wav")
+            .tempfile()
+            .map_err(TtsError::Io)?;
+
+        let input_path = input_file.path().to_string_lossy().to_string();
+        let output_path = output_file.path().to_string_lossy().to_string();
 
         // Write input text to temp file
         if crate::logging::is_debug_mode() {
@@ -353,9 +727,6 @@ impl TtsBackend for CliTtsBackend {
             );
         }
         std::fs::write(&input_path, text).map_err(TtsError::Io)?;
-
-        // Clean up any existing output file
-        let _ = std::fs::remove_file(&output_path);
 
         let args = self.build_args(&input_path, &output_path, voice, text);
 
@@ -373,7 +744,13 @@ impl TtsBackend for CliTtsBackend {
         #[cfg(windows)]
         {
             cmd.creation_flags(CREATE_NO_WINDOW);
-            cmd.env("PATH", get_expanded_path());
+            let mut path = get_expanded_path();
+            if self.is_piper() && self.cuda {
+                if let Some(nvidia_paths) = get_nvidia_dll_paths(&self.command) {
+                    path = format!("{};{}", nvidia_paths, path);
+                }
+            }
+            cmd.env("PATH", path);
         }
         let child = cmd
             .spawn()
@@ -403,7 +780,7 @@ impl TtsBackend for CliTtsBackend {
             log::error!("[CLI TTS] Command: {}", self.command);
             log::error!("[CLI TTS] Args: {:?}", args);
 
-            let _ = std::fs::remove_file(&input_path);
+
 
             // Check if this is piper TTS missing voice model
             if self.is_piper()
@@ -418,8 +795,8 @@ impl TtsBackend for CliTtsBackend {
                     python3 -m piper.download_voices {}\n\n\
                     Then move the downloaded .onnx and .onnx.json files to:\n\
                     {}\n\n\
-                    Available voices: amy, arctic, bryce, danny, hfc_female, hfc_male, joe, john, kathleen, kristin, kusal, l2arctic, lessac, libritts, libritts_r, ljspeech, norman, reza_ibrahim, ryan, sam",
-                    voice, voice, data_dir
+                    Available voices: {}",
+                    voice, voice, data_dir, PIPER_KNOWN_VOICES
                 )));
             }
 
@@ -477,7 +854,7 @@ impl TtsBackend for CliTtsBackend {
 
         // Check if output file exists
         if !std::path::Path::new(&output_path).exists() {
-            let _ = std::fs::remove_file(&input_path);
+
             log::error!(
                 "[CLI TTS] Output file not found after successful command: {}",
                 output_path
@@ -489,7 +866,7 @@ impl TtsBackend for CliTtsBackend {
         }
 
         let bytes = std::fs::read(&output_path).map_err(|e| {
-            let _ = std::fs::remove_file(&input_path);
+
             log::error!(
                 "[CLI TTS] Failed to read output file '{}': {}",
                 output_path,
@@ -509,12 +886,9 @@ impl TtsBackend for CliTtsBackend {
 
         // Validate output
         if bytes.is_empty() {
-            let _ = std::fs::remove_file(&input_path);
-            let _ = std::fs::remove_file(&output_path);
+
             log::error!("[CLI TTS] Output file is empty: {}", output_path);
-            return Err(TtsError::OutputNotFound(format!(
-                "TTS engine created an empty audio file. The TTS synthesis may have failed."
-            )));
+            return Err(TtsError::OutputNotFound("TTS engine created an empty audio file. The TTS synthesis may have failed.".to_string()));
         }
 
         if crate::logging::is_debug_mode() {
@@ -522,9 +896,7 @@ impl TtsBackend for CliTtsBackend {
             log::debug!("[CLI TTS] Cleaning up temp files");
         }
 
-        // Cleanup temp files
-        let _ = std::fs::remove_file(&input_path);
-        let _ = std::fs::remove_file(&output_path);
+
 
         if crate::logging::is_debug_mode() {
             log::debug!(
@@ -545,39 +917,76 @@ impl TtsBackend for CliTtsBackend {
         }
 
         // Check if command exists with version args (e.g., py -3.12)
-        let is_python =
-            self.command == "py" || self.command == "python" || self.command.starts_with("python");
+        let cmd_lower = self.command.to_lowercase();
+        let is_python = self.command == "py"
+            || self.command == "python"
+            || self.command.starts_with("python")
+            || cmd_lower.contains("python")
+            || cmd_lower.contains("py.exe");
 
         if is_python {
-            // For Python, we need to validate the full command with the script
-            // Build args similar to synthesize, but use a test text
-            let test_text = "test";
-            let test_output = Self::output_path();
-            let args = self.build_args(&Self::input_path(), &test_output, "Rosie", test_text);
-
-            if crate::logging::is_debug_mode() {
-                log::debug!("[CLI TTS] Health check args: {:?}", args);
+            // H5: Piper fast path — if the persistent server is already running, a
+            // quick ping is sufficient. No need to spawn a full CLI synthesis
+            // (seconds of model load) for a health check.
+            if self.is_piper() {
+                let status = crate::tts::piper_server::get_piper_server_status();
+                if status.ready {
+                    if let Some(port) = status.port {
+                        let client = reqwest::blocking::Client::builder()
+                            .timeout(std::time::Duration::from_secs(2))
+                            .build()
+                            .map_err(|e| TtsError::Unavailable(format!("Failed to build health client: {e}")))?;
+                        let url = format!("http://127.0.0.1:{}/voices", port);
+                        if client.get(&url).send().is_ok() {
+                            return Ok(());
+                        }
+                    }
+                }
+                if status.running {
+                    return Ok(()); // Server is starting — making progress
+                }
+                // Server is Stopped — fall through to cheap probe below
             }
 
-            // Clean up any existing test files
-            let _ = std::fs::remove_file(&Self::input_path());
-            let _ = std::fs::remove_file(&test_output);
+            // Run a cheap environment/import probe instead of a full multi-second model-load synthesis
+            let is_uv = self.command.eq_ignore_ascii_case("uv") || self.command.to_lowercase().contains("uv");
+            let mut check_cmd = Command::new(&self.command);
+            if is_uv {
+                let ed = Self::engine_dir();
+                let engine_name = match self.preset.as_str() {
+                    "piper" => "piper",
+                    "kokoro-tts" => "kokoro",
+                    "kitten-tts" => "kitten",
+                    "pocket-tts" => "pocket",
+                    other => other,
+                };
+                let project = format!("{}/{}", ed, engine_name);
+                let module = match self.preset.as_str() {
+                    "piper" => "piper",
+                    "kokoro-tts" => "kokoro",
+                    "kitten-tts" => "kittentts",
+                    "pocket-tts" => "pocket_tts",
+                    _ => "sys",
+                };
+                check_cmd.args(["run", "--project", &project, "python", "-c", &format!("import {module}")]);
+            } else {
+                let module = match self.preset.as_str() {
+                    "piper" => "piper",
+                    "kokoro-tts" => "kokoro",
+                    "kitten-tts" => "kittentts",
+                    "pocket-tts" => "pocket_tts",
+                    _ => "sys",
+                };
+                check_cmd.args(["-c", &format!("import {module}")]);
+            }
 
-            // Write a minimal input file
-            let _ = std::fs::write(&Self::input_path(), test_text);
-
-            #[allow(unused_mut)]
-            let mut cmd = Command::new(&self.command);
-            cmd.args(&args)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
             #[cfg(windows)]
             {
-                cmd.creation_flags(CREATE_NO_WINDOW);
-                cmd.env("PATH", get_expanded_path());
+                check_cmd.creation_flags(CREATE_NO_WINDOW);
+                check_cmd.env("PATH", get_expanded_path());
             }
 
-            let result = cmd.output().map_err(|e| {
+            let result = check_cmd.output().map_err(|e| {
                 log::error!(
                     "[CLI TTS] Health check failed - command not found: {}",
                     self.command
@@ -587,7 +996,6 @@ impl TtsBackend for CliTtsBackend {
 
             // Check for Python version errors in stderr
             let stderr = String::from_utf8_lossy(&result.stderr);
-            let _stdout = String::from_utf8_lossy(&result.stdout);
 
             if stderr.contains("No runtime installed") {
                 log::error!("[CLI TTS] Health check failed - Python runtime not installed");
@@ -606,9 +1014,17 @@ impl TtsBackend for CliTtsBackend {
 
             if stderr.contains("ModuleNotFoundError") || stderr.contains("ImportError") {
                 log::error!("[CLI TTS] Health check failed - missing Python module");
-                return Err(TtsError::Unavailable(
-                    "KittenTTS is not installed in the configured Python environment. Run the KittenTTS installer from CopySpeak settings.".to_string()
-                ));
+                let engine_display = match self.preset.as_str() {
+                    "piper" => "Piper",
+                    "kokoro-tts" => "Kokoro-TTS",
+                    "kitten-tts" => "KittenTTS",
+                    "pocket-tts" => "Pocket-TTS",
+                    other => other,
+                };
+                return Err(TtsError::Unavailable(format!(
+                    "{} is not installed in the configured Python environment. Run the installer from CopySpeak settings.",
+                    engine_display
+                )));
             }
 
             if !result.status.success() {
@@ -627,14 +1043,9 @@ impl TtsBackend for CliTtsBackend {
                 )));
             }
 
-            // If command succeeded or script ran (even with other errors), consider it available
             if crate::logging::is_debug_mode() {
                 log::debug!("[CLI TTS] Health check passed for Python command");
             }
-
-            // Clean up test files
-            let _ = std::fs::remove_file(&Self::input_path());
-            let _ = std::fs::remove_file(&test_output);
         } else {
             // For non-Python commands, use simple --help check
             #[allow(unused_mut)]
@@ -664,8 +1075,8 @@ impl TtsBackend for CliTtsBackend {
                 return Err(TtsError::Unavailable(format!(
                     "Piper voices directory not found: {}\n\n\
                     Please create this directory and download voice models.\n\n\
-                    Available voices: amy, arctic, bryce, danny, hfc_female, hfc_male, joe, john, kathleen, kristin, kusal, l2arctic, lessac, libritts, libritts_r, ljspeech, norman, reza_ibrahim, ryan, sam",
-                    data_dir
+                    Available voices: {}",
+                    data_dir, PIPER_KNOWN_VOICES
                 )));
             }
 
@@ -687,8 +1098,8 @@ impl TtsBackend for CliTtsBackend {
                 return Err(TtsError::Unavailable(format!(
                     "No Piper voice files found in: {}\n\n\
                     Please download voice models and place them in this directory.\n\n\
-                    Available voices: amy, arctic, bryce, danny, hfc_female, hfc_male, joe, john, kathleen, kristin, kusal, l2arctic, lessac, libritts, libritts_r, ljspeech, norman, reza_ibrahim, ryan, sam",
-                    data_dir
+                    Available voices: {}",
+                    data_dir, PIPER_KNOWN_VOICES
                 )));
             }
         }
@@ -723,6 +1134,8 @@ mod tests {
                 "--voice".into(),
                 "{voice}".into(),
             ],
+            false,
+            "test".into(),
         );
         let args = backend.build_args("/tmp/input.txt", "/tmp/out.wav", "af_heart", "hello world");
         assert_eq!(
@@ -734,15 +1147,19 @@ mod tests {
     #[test]
     fn test_build_args_legacy_text_placeholder() {
         // Test backward compatibility: {text} should also work as input file path
-        let backend =
-            CliTtsBackend::new("test-tts".into(), vec!["{text}".into(), "{output}".into()]);
+        let backend = CliTtsBackend::new(
+            "test-tts".into(),
+            vec!["{text}".into(), "{output}".into()],
+            false,
+            "test".into(),
+        );
         let args = backend.build_args("/tmp/input.txt", "/tmp/out.wav", "af_heart", "hello world");
         assert_eq!(args, vec!["/tmp/input.txt", "/tmp/out.wav"]);
     }
 
     #[test]
     fn test_voice_display_name_extracts_middle_segment() {
-        let backend = CliTtsBackend::new("piper".into(), vec![]);
+        let backend = CliTtsBackend::new("piper".into(), vec![], false, "piper".into());
 
         // Piper voice format: en_US-joe-medium
         assert_eq!(backend.voice_display_name("en_US-joe-medium"), "joe");
@@ -752,4 +1169,16 @@ mod tests {
         assert_eq!(backend.voice_display_name("af_heart"), "af_heart");
         assert_eq!(backend.voice_display_name("alba"), "alba");
     }
+
+    #[test]
+    fn test_piper_request_body_serialization() {
+        let text = "Hello world";
+        let voice = "en_US-joe-medium";
+        // Speed is playback-only; synthesis always uses length_scale: 1.0
+        let body = serde_json::json!({ "text": text, "voice": voice, "length_scale": 1.0 });
+        assert_eq!(body["text"], text);
+        assert_eq!(body["voice"], voice);
+        assert_eq!(body["length_scale"], 1.0);
+    }
 }
+
