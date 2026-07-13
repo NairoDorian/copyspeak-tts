@@ -40,15 +40,28 @@ def main() -> int:
 
     # Wrapper lives in <engine_dir>/scripts/; voices live in <engine_dir>/voices/.
     voices_dir = Path(__file__).resolve().parent.parent / "voices"
-    # ponytail: resolve by exact basename, else first .onnx whose stem ends with the voice name.
-    model = (voices_dir / f"{args.voice}.onnx")
+    home_dir = Path.home() / "piper-voices"
+
+    model = voices_dir / f"{args.voice}.onnx"
     if not model.exists():
         match = next((p for p in voices_dir.glob("*.onnx") if p.stem == args.voice), None)
-        if match is None:
-            print(f"ERROR: voice model not found: {model}", file=sys.stderr)
-            print(f"  Available: {[p.stem for p in voices_dir.glob('*.onnx')]}", file=sys.stderr)
-            return 1
-        model = match
+        if match is not None:
+            model = match
+        else:
+            model = home_dir / f"{args.voice}.onnx"
+            if not model.exists():
+                match = next((p for p in home_dir.glob("*.onnx") if p.stem == args.voice), None)
+                if match is not None:
+                    model = match
+                else:
+                    # Build clean list of unique available stems from both directories
+                    available_stems = sorted(list(set(
+                        [p.stem for p in voices_dir.glob('*.onnx')] +
+                        [p.stem for p in home_dir.glob('*.onnx')]
+                    )))
+                    print(f"ERROR: voice model not found: {voices_dir / f'{args.voice}.onnx'}", file=sys.stderr)
+                    print(f"  Available: {available_stems}", file=sys.stderr)
+                    return 1
 
     try:
         from piper import PiperVoice
