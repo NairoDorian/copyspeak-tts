@@ -155,19 +155,28 @@ pub fn test_local_engine(
         let cfg = config.lock().unwrap();
         cfg.tts.cuda
     };
+    let mut voice = spec.voice.clone();
+    if engine == "piper" {
+        if let Ok(local_voices) = crate::commands::tts::voices::get_local_piper_voices() {
+            if !local_voices.is_empty() {
+                voice = local_voices[0].value.clone();
+            }
+        }
+    }
+
     let backend = CliTtsBackend::new(spec.command.clone(), spec.args_template.clone(), cuda, engine.clone());
     let backend_name = format!("Local ({})", engine);
 
     log::info!(
         "[IPC] test_local_engine '{}' — synthesizing test clip (voice: {})",
         engine,
-        spec.voice
+        voice
     );
 
     // synthesize() blocks (uv run + python); run it inline like the cloud
     // health checks. First-run engines may download models here, which can be
     // slow — the UI shows a spinner.
-    let result = backend.synthesize("Hello.", &spec.voice);
+    let result = backend.synthesize("Hello.", &voice);
 
     match result {
         Ok(bytes) => {

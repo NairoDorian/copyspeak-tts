@@ -495,11 +495,21 @@ impl CliTtsBackend {
         };
         let model_path = std::path::Path::new(&data_dir).join(format!("{}.onnx", voice_stem));
         if !model_path.exists() && !std::path::Path::new(voice).exists() {
-            return Err(TtsError::CommandFailed(format!(
-                "Piper voice model not found: {voice}\n\n\
-                 Download it with:\n  python -m piper.download_voices {voice}\n\n\
-                 Then place the .onnx and .onnx.json files in:\n  {data_dir}",
-            )));
+            let engine_voice_path = dirs::data_local_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("CopySpeak")
+                .join("engines")
+                .join("piper")
+                .join("voices")
+                .join(format!("{}.onnx", voice_stem));
+
+            if !engine_voice_path.exists() {
+                return Err(TtsError::CommandFailed(format!(
+                    "Piper voice model not found: {voice}\n\n\
+                     Download it with:\n  python -m piper.download_voices {voice}\n\n\
+                     Then place the .onnx and .onnx.json files in:\n  {data_dir}",
+                )));
+            }
         }
 
         // 1. Ensure server is running and get handle

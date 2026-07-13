@@ -121,6 +121,23 @@ pub(crate) fn get_nvidia_dll_paths(python_executable: &str) -> Option<String> {
         .clone()
 }
 
+fn resolve_python_path() -> std::path::PathBuf {
+    let base = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("CopySpeak")
+        .join("engines")
+        .join("piper");
+    
+    #[cfg(target_os = "windows")]
+    {
+        base.join(".venv").join("Scripts").join("python.exe")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        base.join(".venv").join("bin").join("python")
+    }
+}
+
 /// Restart/Start the server in background.
 fn spawn_start_thread(
     generation: u64,
@@ -138,13 +155,25 @@ fn spawn_start_thread(
         };
         let mut model_path = std::path::PathBuf::from(&data_dir).join(&voice_file);
         if !model_path.exists() {
-            let alt_path = std::path::PathBuf::from(&voice);
-            if alt_path.exists() {
-                model_path = alt_path;
+            let engine_voice_path = dirs::data_local_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("CopySpeak")
+                .join("engines")
+                .join("piper")
+                .join("voices")
+                .join(&voice_file);
+
+            if engine_voice_path.exists() {
+                model_path = engine_voice_path;
             } else {
-                log::warn!("[Piper] Start failed: model file not found at {}", model_path.display());
-                emit_model_status("error", Some(&voice), cuda, Some("Model file not found"));
-                return;
+                let alt_path = std::path::PathBuf::from(&voice);
+                if alt_path.exists() {
+                    model_path = alt_path;
+                } else {
+                    log::warn!("[Piper] Start failed: model file not found at {}", model_path.display());
+                    emit_model_status("error", Some(&voice), cuda, Some("Model file not found"));
+                    return;
+                }
             }
         }
 
@@ -159,7 +188,18 @@ fn spawn_start_thread(
 
         log::info!("[Piper] Starting HTTP server on port {} — model: {}, cuda: {}", port, model_path.display(), cuda);
 
-        let mut cmd = std::process::Command::new(&command);
+        let python_exe = if command == "uv" {
+            let venv_python = resolve_python_path();
+            if venv_python.exists() {
+                venv_python.to_string_lossy().to_string()
+            } else {
+                "python".to_string()
+            }
+        } else {
+            command.clone()
+        };
+
+        let mut cmd = std::process::Command::new(&python_exe);
         let mut args = vec![
             "-m".to_string(),
             "piper.http_server".to_string(),
@@ -188,7 +228,7 @@ fn spawn_start_thread(
         {
             cmd.creation_flags(CREATE_NO_WINDOW);
             if cuda {
-                if let Some(nvidia_paths) = get_nvidia_dll_paths(&command) {
+                if let Some(nvidia_paths) = get_nvidia_dll_paths(&python_exe) {
                     let current_path = std::env::var("PATH").unwrap_or_default();
                     let new_path = format!("{};{}", nvidia_paths, current_path);
                     cmd.env("PATH", new_path);

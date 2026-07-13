@@ -121,24 +121,40 @@ fn parse_piper_voice_label(filename: &str) -> String {
 
 #[tauri::command]
 pub fn get_local_piper_voices() -> Result<Vec<PiperVoiceOption>, String> {
+    let mut paths_to_scan = Vec::new();
+
+    // 1. User's home piper-voices dir
     let data_dir = crate::tts::cli::CliTtsBackend::data_dir();
-    let path = std::path::Path::new(&data_dir);
-    if !path.exists() {
-        return Ok(Vec::new());
+    paths_to_scan.push(std::path::PathBuf::from(&data_dir));
+
+    // 2. Engine voices dir
+    if let Some(local_dir) = dirs::data_local_dir() {
+        paths_to_scan.push(local_dir.join("CopySpeak").join("engines").join("piper").join("voices"));
     }
 
     let mut voices = Vec::new();
-    let entries =
-        std::fs::read_dir(path).map_err(|e| format!("Failed to read voices dir: {}", e))?;
-    for entry in entries.filter_map(|e| e.ok()) {
-        let p = entry.path();
-        if p.is_file() && p.extension().is_some_and(|ext| ext == "onnx") {
-            if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                let label = parse_piper_voice_label(stem);
-                voices.push(PiperVoiceOption {
-                    value: stem.to_string(),
-                    label,
-                });
+    let mut seen_stems = std::collections::HashSet::new();
+
+    for path in paths_to_scan {
+        if !path.exists() {
+            continue;
+        }
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let p = entry.path();
+                if p.is_file() && p.extension().is_some_and(|ext| ext == "onnx") {
+                    if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                        let stem_string = stem.to_string();
+                        if !seen_stems.contains(&stem_string) {
+                            seen_stems.insert(stem_string.clone());
+                            let label = parse_piper_voice_label(stem);
+                            voices.push(PiperVoiceOption {
+                                value: stem_string,
+                                label,
+                            });
+                        }
+                    }
+                }
             }
         }
     }
