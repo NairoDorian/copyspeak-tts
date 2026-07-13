@@ -2,6 +2,7 @@
 
 use crate::config::{AppConfig, TtsEngine};
 use crate::tts::cli::CliTtsBackend;
+use crate::tts::TtsBackend;
 use crate::tts::TtsError;
 use std::sync::Mutex;
 use tauri::State;
@@ -197,14 +198,15 @@ pub async fn test_tts_engine_config(
 ) -> Result<TtsHealthResult, String> {
     let engine_enum = parse_engine(&engine)?;
 
+    let mut tts_config = {
+        let cfg = crate::lock_or_recover!(config);
+        cfg.tts.clone()
+    };
+    if let Some(p) = preset {
+        tts_config.preset = p;
+    }
+
     let result = tokio::task::spawn_blocking(move || {
-        let mut tts_config = {
-            let cfg = crate::lock_or_recover!(config);
-            cfg.tts.clone()
-        };
-        if let Some(p) = preset {
-            tts_config.preset = p;
-        }
         let backend: Box<dyn crate::tts::TtsBackend> = create_backend(&engine_enum, &tts_config);
         let backend_name = match &engine_enum {
             TtsEngine::Local => tts_config.command.clone(),
@@ -235,7 +237,7 @@ pub async fn test_tts_engine_config(
     .await
     .map_err(|e| format!("Task join error: {e}"))?;
 
-    Ok(result)
+    result.map_err(|e: String| format!("Health check failed: {e}"))
 }
 
 /// Test a local (uv-installed) engine by running a real synthesis through its
@@ -260,6 +262,7 @@ pub async fn test_local_engine(engine: String) -> Result<TtsHealthResult, String
     };
     let engine_label = engine.clone();
     let backend_name = format!("Local ({})", engine_label);
+    let engine_for_log = engine.clone();
     let backend =
         CliTtsBackend::new(spec.command.clone(), spec.args_template.clone(), false, spec.preset.clone());
 
@@ -287,7 +290,7 @@ pub async fn test_local_engine(engine: String) -> Result<TtsHealthResult, String
             if looks_ok {
                 log::info!(
                     "[IPC] test_local_engine '{}' produced {} bytes — OK",
-                    engine,
+                    engine_for_log,
                     bytes.len()
                 );
                 Ok(TtsHealthResult {
@@ -302,7 +305,7 @@ pub async fn test_local_engine(engine: String) -> Result<TtsHealthResult, String
             } else {
                 log::warn!(
                     "[IPC] test_local_engine '{}' produced {} bytes — too small or unrecognized",
-                    engine,
+                    engine_for_log,
                     bytes.len()
                 );
                 Ok(TtsHealthResult {
@@ -317,7 +320,7 @@ pub async fn test_local_engine(engine: String) -> Result<TtsHealthResult, String
             }
         }
         Err(e) => {
-            log::warn!("[IPC] test_local_engine '{}' failed: {}", engine, e);
+            log::warn!("[IPC] test_local_engine '{}' failed: {}", engine_for_log, e);
             synthesize_health_failure(&backend_name, &e)
         }
     }
