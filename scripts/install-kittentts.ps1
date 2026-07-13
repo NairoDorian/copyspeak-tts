@@ -63,6 +63,20 @@ $dstWrapper = Join-Path $scriptsDir "copyspeak-kitten.py"
 Copy-Item $srcWrapper $dstWrapper -Force
 Write-Host "  Wrapper installed: $dstWrapper" -ForegroundColor Gray
 
+# Ship the persistent HTTP server script too, so CopySpeak can keep the model
+# loaded in RAM (faster synthesis) by launching `uv run --project ... python
+# <scripts>/kitten_server.py`. Without this, the app falls back to the slower
+# one-shot wrapper on every utterance.
+$repoRoot = Split-Path $PSScriptRoot -Parent
+$srcServer = Join-Path $repoRoot "src-tauri" "kitten_server.py"
+$dstServer = Join-Path $scriptsDir "kitten_server.py"
+if (Test-Path $srcServer) {
+    Copy-Item $srcServer $dstServer -Force
+    Write-Host "  HTTP server installed: $dstServer" -ForegroundColor Gray
+} else {
+    Write-Host "  WARNING: kitten_server.py not found at $srcServer; persistent server disabled." -ForegroundColor Yellow
+}
+
 # KittenTTS ships 8 built-in English voices; the model auto-downloads on
 # first synth. Voice ids are case-sensitive (capitalized first letter).
 $kittenVoices = @(
